@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+
+    <!-- ExcelDNA specific properties -->
+    <ExcelAddInName>Domino Governance Tracker</ExcelAddInName>
+    <ExcelAddInFileName>DominoGovernanceTracker-AddIn</ExcelAddInFileName>
+
+    <!-- Packing options -->
+    <RunExcelDnaPack>true</RunExcelDnaPack>
+    <ExcelDnaPackCompressResources>false</ExcelDnaPackCompressResources>
+    <!-- false helps avoid antivirus false positives -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Core ExcelDNA -->
+    <PackageReference Include="ExcelDna.AddIn" Version="1.9.0" />
+    <PackageReference Include="ExcelDna.Interop" Version="15.0.1" />
+
+    <!-- HTTP Client and JSON -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+
+    <!-- Polly for resilient HTTP calls -->
+    <PackageReference Include="Polly" Version="8.4.2" />
+
+    <!-- Logging (for diagnostics) -->
+    <PackageReference Include="Serilog" Version="4.1.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- .NET Framework references -->
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Include config files in output -->
+    <None Update="config.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="App.config">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

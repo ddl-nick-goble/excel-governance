@@ -1,0 +1,13 @@
+{
+  "apiEndpoint": "http://localhost:5000/api/events",
+  "apiKey": "",
+  "trackingEnabled": true,
+  "maxBufferSize": 100,
+  "flushIntervalSeconds": 10,
+  "localBufferPath": "",
+  "maxRetryAttempts": 3,
+  "httpTimeoutSeconds": 30,
+  "trackSelectionChanges": false,
+  "includeFormulas": true,
+  "maxBufferFileSizeMB": 50
+}

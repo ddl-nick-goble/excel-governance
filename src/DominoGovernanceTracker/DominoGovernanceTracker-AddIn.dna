@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<DnaLibrary Name="Domino Governance Tracker" RuntimeVersion="v4.0" xmlns="http://schemas.excel-dna.net/addin/2020/07/dnalibrary">
+  <!-- Main Assembly -->
+  <ExternalLibrary Path="DominoGovernanceTracker.dll" ExplicitExports="false" LoadFromBytes="true" Pack="true" IncludePdb="false" />
+
+  <!-- Core Dependencies -->
+  <Reference Path="Microsoft.Bcl.AsyncInterfaces.dll" Pack="true" />
+  <Reference Path="Microsoft.Bcl.TimeProvider.dll" Pack="true" />
+  <Reference Path="System.Buffers.dll" Pack="true" />
+  <Reference Path="System.Memory.dll" Pack="true" />
+  <Reference Path="System.Numerics.Vectors.dll" Pack="true" />
+  <Reference Path="System.Runtime.CompilerServices.Unsafe.dll" Pack="true" />
+  <Reference Path="System.Threading.Tasks.Extensions.dll" Pack="true" />
+  <Reference Path="System.ValueTuple.dll" Pack="true" />
+  <Reference Path="System.ComponentModel.Annotations.dll" Pack="true" />
+  <Reference Path="System.Diagnostics.DiagnosticSource.dll" Pack="true" />
+
+  <!-- System.Text.Json Dependencies -->
+  <Reference Path="System.Text.Json.dll" Pack="true" />
+  <Reference Path="System.Text.Encodings.Web.dll" Pack="true" />
+
+  <!-- Polly Dependencies -->
+  <Reference Path="Polly.dll" Pack="true" />
+  <Reference Path="Polly.Core.dll" Pack="true" />
+  <Reference Path="System.Threading.Channels.dll" Pack="true" />
+
+  <!-- Logging -->
+  <Reference Path="Serilog.dll" Pack="true" />
+  <Reference Path="Serilog.Sinks.File.dll" Pack="true" />
+
+  <!-- Configuration -->
+  <File Name="App.config" Path="App.config" Pack="true" />
+</DnaLibrary>

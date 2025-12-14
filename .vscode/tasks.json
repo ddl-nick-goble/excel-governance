@@ -1,0 +1,39 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "command": "powershell",
+            "type": "shell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\run-debug.ps1"
+            ],
+            "problemMatcher": "$msCompile",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "clean",
+            "command": "powershell",
+            "type": "shell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\run-debug.ps1",
+                "-Clean"
+            ],
+            "problemMatcher": "$msCompile",
+            "group": "build"
+        }
+    ]
+}

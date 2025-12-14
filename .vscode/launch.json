@@ -1,0 +1,24 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "DGT: Attach to Excel",
+            "type": "clr",
+            "request": "attach",
+            "processName": "EXCEL.EXE"
+        },
+        {
+            "name": "DGT: Build and Run",
+            "type": "clr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${env:ProgramFiles}\\Microsoft Office\\root\\Office16\\EXCEL.EXE",
+            "args": [
+                "${workspaceFolder}\\src\\DominoGovernanceTracker\\bin\\Debug\\net472\\DominoGovernanceTracker-AddIn.xll"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "internalConsole",
+            "stopAtEntry": false
+        }
+    ]
+}
