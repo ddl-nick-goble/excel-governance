@@ -63,6 +63,25 @@ namespace DominoGovernanceTracker.UI
                               onAction='OnRefreshClick'
                               screentip='Refresh tracking status'/>
                     </group>
+                    <group id='dgtBufferGroup' label='Event Buffer'>
+                      <labelControl id='lblBufferCount'
+                                   getLabel='GetBufferCountLabel'
+                                   screentip='Number of events in local buffer (failed to send to API)'/>
+                      <button id='btnFlushBuffer'
+                              label='Flush Buffer'
+                              imageMso='RecordsDeleteRecord'
+                              size='normal'
+                              onAction='OnFlushBufferClick'
+                              screentip='Attempt to send buffered events to API'
+                              supertip='Tries to send all locally buffered events to the API. Use this if events failed to send earlier.'/>
+                      <button id='btnClearBuffer'
+                              label='Clear Buffer'
+                              imageMso='Delete'
+                              size='normal'
+                              onAction='OnClearBufferClick'
+                              screentip='Delete all buffered events'
+                              supertip='Permanently deletes all buffered events. Use during development to clear old incompatible events.'/>
+                    </group>
                   </tab>
                 </tabs>
               </ribbon>
@@ -225,6 +244,170 @@ namespace DominoGovernanceTracker.UI
             catch (Exception ex)
             {
                 Log.Error(ex, "Error refreshing ribbon");
+            }
+        }
+
+        public string GetBufferCountLabel(IRibbonControl control)
+        {
+            try
+            {
+                var addIn = AddIn.Instance;
+                if (addIn?.Publisher?.Buffer == null)
+                    return "Buffered: -";
+
+                var count = addIn.Publisher.Buffer.GetBufferedEventCount();
+                if (count == 0)
+                    return "Buffered: 0";
+
+                return $"Buffered: {count:N0}";
+            }
+            catch
+            {
+                return "Buffered: Error";
+            }
+        }
+
+        public void OnFlushBufferClick(IRibbonControl control)
+        {
+            try
+            {
+                var addIn = AddIn.Instance;
+                if (addIn?.Publisher == null)
+                {
+                    System.Windows.Forms.MessageBox.Show(
+                        "Publisher not available.",
+                        "DGT - Flush Buffer",
+                        System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var count = addIn.Publisher.Buffer?.GetBufferedEventCount() ?? 0;
+                if (count == 0)
+                {
+                    System.Windows.Forms.MessageBox.Show(
+                        "No buffered events to flush.",
+                        "DGT - Flush Buffer",
+                        System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Information);
+                    return;
+                }
+
+                var result = System.Windows.Forms.MessageBox.Show(
+                    $"Attempt to send {count:N0} buffered events to the API?\n\n" +
+                    "This will try to publish all locally buffered events. " +
+                    "If the API is unavailable or events are incompatible, they will remain buffered.",
+                    "DGT - Flush Buffer",
+                    System.Windows.Forms.MessageBoxButtons.YesNo,
+                    System.Windows.Forms.MessageBoxIcon.Question);
+
+                if (result == System.Windows.Forms.DialogResult.Yes)
+                {
+                    // Trigger buffer flush asynchronously
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await addIn.Publisher.FlushBufferAsync();
+                            Log.Information("Buffer flush completed");
+
+                            // Refresh ribbon on UI thread
+                            ExcelDnaUtil.Application.GetType().InvokeMember("Run",
+                                System.Reflection.BindingFlags.InvokeMethod,
+                                null,
+                                ExcelDnaUtil.Application,
+                                new object[] { "DgtRibbon.InvalidateRibbon" });
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Error flushing buffer");
+                        }
+                    });
+
+                    System.Windows.Forms.MessageBox.Show(
+                        "Buffer flush started. Check the status indicator for results.",
+                        "DGT - Flush Buffer",
+                        System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error in flush buffer click handler");
+                System.Windows.Forms.MessageBox.Show(
+                    $"Error flushing buffer: {ex.Message}",
+                    "DGT - Flush Buffer Error",
+                    System.Windows.Forms.MessageBoxButtons.OK,
+                    System.Windows.Forms.MessageBoxIcon.Error);
+            }
+        }
+
+        public void OnClearBufferClick(IRibbonControl control)
+        {
+            try
+            {
+                var addIn = AddIn.Instance;
+                if (addIn?.Publisher?.Buffer == null)
+                {
+                    System.Windows.Forms.MessageBox.Show(
+                        "Buffer not available.",
+                        "DGT - Clear Buffer",
+                        System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var count = addIn.Publisher.Buffer.GetBufferedEventCount();
+                if (count == 0)
+                {
+                    System.Windows.Forms.MessageBox.Show(
+                        "No buffered events to clear.",
+                        "DGT - Clear Buffer",
+                        System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Information);
+                    return;
+                }
+
+                var result = System.Windows.Forms.MessageBox.Show(
+                    $"Permanently delete {count:N0} buffered events?\n\n" +
+                    "WARNING: This cannot be undone. Use this during development to clear " +
+                    "old incompatible events that are preventing the circuit breaker from closing.",
+                    "DGT - Clear Buffer",
+                    System.Windows.Forms.MessageBoxButtons.YesNo,
+                    System.Windows.Forms.MessageBoxIcon.Warning);
+
+                if (result == System.Windows.Forms.DialogResult.Yes)
+                {
+                    var cleared = addIn.Publisher.Buffer.ClearBuffer();
+                    if (cleared)
+                    {
+                        Log.Information("Buffer manually cleared ({Count} events deleted)", count);
+                        _ribbon?.Invalidate();
+
+                        System.Windows.Forms.MessageBox.Show(
+                            $"Successfully deleted {count:N0} buffered events.",
+                            "DGT - Clear Buffer",
+                            System.Windows.Forms.MessageBoxButtons.OK,
+                            System.Windows.Forms.MessageBoxIcon.Information);
+                    }
+                    else
+                    {
+                        System.Windows.Forms.MessageBox.Show(
+                            "Failed to clear buffer. Check logs for details.",
+                            "DGT - Clear Buffer",
+                            System.Windows.Forms.MessageBoxButtons.OK,
+                            System.Windows.Forms.MessageBoxIcon.Error);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error in clear buffer click handler");
+                System.Windows.Forms.MessageBox.Show(
+                    $"Error clearing buffer: {ex.Message}",
+                    "DGT - Clear Buffer Error",
+                    System.Windows.Forms.MessageBoxButtons.OK,
+                    System.Windows.Forms.MessageBoxIcon.Error);
             }
         }
 

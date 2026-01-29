@@ -216,6 +216,37 @@ namespace DominoGovernanceTracker.Publishing
         }
 
         /// <summary>
+        /// Gets the count of buffered events in the file
+        /// </summary>
+        public int GetBufferedEventCount()
+        {
+            lock (_fileLock)
+            {
+                try
+                {
+                    if (!File.Exists(_bufferPath))
+                        return 0;
+
+                    int count = 0;
+                    using (var reader = new StreamReader(_bufferPath))
+                    {
+                        while (reader.ReadLine() != null)
+                        {
+                            count++;
+                        }
+                    }
+
+                    return count;
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to get buffered event count");
+                    return 0;
+                }
+            }
+        }
+
+        /// <summary>
         /// Gets total events buffered (lifetime counter)
         /// </summary>
         public long TotalEventsBuffered => Interlocked.Read(ref _eventsBuffered);

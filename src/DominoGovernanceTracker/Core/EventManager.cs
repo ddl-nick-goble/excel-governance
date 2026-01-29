@@ -271,7 +271,7 @@ namespace DominoGovernanceTracker.Core
                         Details = $"BulkOperation:{cellCount} cells changed"
                     });
 
-                    IncrementWorkbookEventCount(workbookName);
+                    IncrementWorkbookEventCount(workbookName, cellCount);
 
                     Log.Information("Bulk operation detected: {CellCount} cells changed in {Workbook}!{Sheet}",
                         cellCount, workbookName, ws.Name);
@@ -522,19 +522,19 @@ namespace DominoGovernanceTracker.Core
             _workbookEventCounts.AddOrUpdate(workbookName, 0, (key, oldValue) => 0);
         }
 
-        private void IncrementWorkbookEventCount(string workbookName)
+        private void IncrementWorkbookEventCount(string workbookName, int count = 1)
         {
             // CRITICAL for compliance tracking: Thread-safe atomic increment
             if (workbookName == _currentWorkbookName)
             {
-                Interlocked.Increment(ref _currentWorkbookEventCount);
+                Interlocked.Add(ref _currentWorkbookEventCount, count);
             }
 
             // Increment count in concurrent dictionary (thread-safe)
             _workbookEventCounts.AddOrUpdate(
                 workbookName,
-                1, // Initial value if key doesn't exist
-                (key, oldValue) => oldValue + 1); // Increment if exists
+                count, // Initial value if key doesn't exist
+                (key, oldValue) => oldValue + count); // Increment if exists
         }
 
         private int GetWorkbookEventCount(string workbookName)

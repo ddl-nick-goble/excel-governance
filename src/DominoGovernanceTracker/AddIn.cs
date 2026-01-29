@@ -279,6 +279,11 @@ namespace DominoGovernanceTracker
         // === PUBLIC API FOR RIBBON ===
 
         /// <summary>
+        /// Gets the HTTP event publisher (for buffer management UI)
+        /// </summary>
+        public HttpEventPublisher Publisher => _publisher;
+
+        /// <summary>
         /// Gets whether tracking is currently active
         /// </summary>
         public bool IsTracking()

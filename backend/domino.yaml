@@ -1,0 +1,89 @@
+# Domino Model Configuration
+# Deploy this FastAPI backend as a Domino Model API
+
+# Model metadata
+name: domino-governance-backend
+description: High-performance backend for Excel compliance and governance tracking
+version: 1.0.0
+
+# Runtime environment
+environment:
+  # Base image (use Domino's standard Python environment)
+  image: domino/python:3.10-slim
+
+  # Python dependencies
+  requirements: requirements.txt
+
+  # Entry point script
+  entry_point: domino_entrypoint.py
+
+# Model API configuration
+model:
+  # Model type (API for RESTful services)
+  type: api
+
+  # Port configuration
+  port: 8000
+
+  # Health check endpoint for Domino orchestration
+  health_check:
+    path: /health
+    interval: 30s
+    timeout: 10s
+    retries: 3
+
+  # Readiness check (when to start routing traffic)
+  readiness_check:
+    path: /ready
+    interval: 10s
+    timeout: 5s
+    retries: 3
+
+  # Auto-scaling configuration (optional)
+  scaling:
+    min_replicas: 1
+    max_replicas: 5
+    target_cpu_utilization: 70
+
+# Resource requests/limits
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+
+# Environment variables
+env:
+  - name: APP_NAME
+    value: domino-governance-backend
+  - name: ENVIRONMENT
+    value: production
+  - name: LOG_LEVEL
+    value: INFO
+  - name: DATABASE_URL
+    # Use Domino's managed PostgreSQL or external database
+    # Format: postgresql+asyncpg://user:password@host:port/database
+    valueFrom:
+      secretKeyRef:
+        name: dgt-database-credentials
+        key: connection_string
+  - name: API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: dgt-api-credentials
+        key: api_key
+  - name: CORS_ORIGINS
+    value: "*"
+
+# Persistent storage (for SQLite in dev, or file-based caching)
+volumes:
+  - name: data
+    mountPath: /app/data
+    size: 10Gi
+
+# Secrets (create these in Domino before deployment)
+secrets:
+  - dgt-database-credentials  # DATABASE_URL
+  - dgt-api-credentials       # API_KEY

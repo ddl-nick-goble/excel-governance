@@ -34,6 +34,11 @@ namespace DominoGovernanceTracker.Publishing
         private int _circuitBreakerIsOpen; // 0 = false, 1 = true (thread-safe with Interlocked - Polly callbacks run on background threads)
         private int _isFlushingEvents = 0; // 0 = not flushing, 1 = flushing
 
+        /// <summary>
+        /// Gets the local buffer (for buffer management UI)
+        /// </summary>
+        public LocalBuffer Buffer => _buffer;
+
         public HttpEventPublisher(DgtConfig config, EventQueue queue)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
@@ -304,8 +309,11 @@ namespace DominoGovernanceTracker.Publishing
                 // Execute with resilience pipeline
                 var result = await _resiliencePipeline.ExecuteAsync(async ct =>
                 {
-                    // Serialize events to JSON
-                    var json = JsonSerializer.Serialize(events, new JsonSerializerOptions
+                    // Wrap events in batch object to match backend schema
+                    var batch = new AuditEventBatch(events);
+
+                    // Serialize batch to JSON
+                    var json = JsonSerializer.Serialize(batch, new JsonSerializerOptions
                     {
                         WriteIndented = false
                     });
@@ -357,6 +365,15 @@ namespace DominoGovernanceTracker.Publishing
             {
                 Task.Run(() => ProcessBufferedEvents(), _cancellationTokenSource.Token);
             }
+        }
+
+        /// <summary>
+        /// Manually flushes buffered events to API (called from ribbon UI)
+        /// </summary>
+        public async Task FlushBufferAsync()
+        {
+            Log.Information("Manual buffer flush requested");
+            await ProcessBufferedEvents();
         }
 
         /// <summary>
