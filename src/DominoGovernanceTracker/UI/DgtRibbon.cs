@@ -42,61 +42,75 @@ namespace DominoGovernanceTracker.UI
 
         public override string GetCustomUI(string ribbonId)
         {
-            // Minimal ribbon with subtle status indicator
             return @"
             <customUI xmlns='http://schemas.microsoft.com/office/2009/07/customui' onLoad='OnRibbonLoad'>
               <ribbon>
                 <tabs>
-                  <tab id='dgtTab' label='DGT' insertAfterMso='TabView'>
+                  <tab id='dgtTab' label='Model' insertAfterMso='TabView'>
+
+                    <group id='dgtModelGroup' label='Model Registration'>
+                      <button id='btnRegisterModel'
+                              label='Register&#xA;Model'
+                              imageMso='ReviewProtectWorkbook'
+                              size='large'
+                              onAction='OnRegisterModelClick'
+                              screentip='Register this Workbook'
+                              supertip='Link this model to the central governance registry.'/>
+                      <box id='boxMetadata' boxStyle='vertical'>
+                        <labelControl id='lblModelName'
+                                     getLabel='GetModelNameLabel'/>
+                        <labelControl id='lblVersion'
+                                     getLabel='GetVersionLabel'/>
+                        <labelControl id='lblDate'
+                                     getLabel='GetDateLabel'/>
+                      </box>
+                    </group>
+
                     <group id='dgtStatusGroup' label='Governance Tracker'>
                       <button id='btnStatusIndicator'
                               getLabel='GetStatusLabel'
                               getImage='GetStatusImage'
-                              size='normal'
-                              screentip='DGT Tracking Status'
+                              size='large'
+                              screentip='Tracking Status'
                               supertip='Green = Tracking normally | Orange = API error (buffering events locally) | Gray = Inactive'/>
-                      <labelControl id='lblEventCount'
-                                   getLabel='GetEventCountLabel'
-                                   screentip='Number of events tracked for current workbook'/>
-                      <separator id='sep1'/>
-                      <button id='btnRefresh'
-                              label='Refresh'
-                              imageMso='Refresh'
-                              size='normal'
-                              onAction='OnRefreshClick'
-                              screentip='Refresh tracking status'/>
+                      <box id='boxStatus' boxStyle='vertical'>
+                        <labelControl id='lblEventCount'
+                                     getLabel='GetEventCountLabel'/>
+                        <button id='btnRefresh'
+                                label='Refresh Status'
+                                imageMso='Refresh'
+                                onAction='OnRefreshClick'
+                                screentip='Refresh tracking status'/>
+                      </box>
                     </group>
-                    <group id='dgtModelGroup' label='Model Registration'>
-                      <button id='btnRegisterModel'
-                              label='Register'
-                              imageMso='ModuleInsert'
-                              size='normal'
-                              onAction='OnRegisterModelClick'
-                              screentip='Register this workbook as a Domino model'
-                              supertip='Opens a dialog to register or re-register this workbook. Events are only tracked for registered workbooks.'/>
-                      <labelControl id='lblModelStatus'
-                                   getLabel='GetModelStatusLabel'
-                                   screentip='Model registration status for active workbook'/>
-                    </group>
+
                     <group id='dgtBufferGroup' label='Event Buffer'>
-                      <labelControl id='lblBufferCount'
-                                   getLabel='GetBufferCountLabel'
-                                   screentip='Number of events in local buffer (failed to send to API)'/>
-                      <button id='btnFlushBuffer'
-                              label='Flush Buffer'
-                              imageMso='RecordsDeleteRecord'
-                              size='normal'
-                              onAction='OnFlushBufferClick'
-                              screentip='Attempt to send buffered events to API'
-                              supertip='Tries to send all locally buffered events to the API. Use this if events failed to send earlier.'/>
-                      <button id='btnClearBuffer'
-                              label='Clear Buffer'
-                              imageMso='Delete'
-                              size='normal'
-                              onAction='OnClearBufferClick'
-                              screentip='Delete all buffered events'
-                              supertip='Permanently deletes all buffered events. Use during development to clear old incompatible events.'/>
+                      <box id='boxBufferControls' boxStyle='vertical'>
+                        <labelControl id='lblBufferCount'
+                                     getLabel='GetBufferCountLabel'/>
+                        <button id='btnFlushBuffer'
+                                label='Flush to API'
+                                imageMso='ServerConnection'
+                                onAction='OnFlushBufferClick'
+                                screentip='Send buffered events to API'
+                                supertip='Tries to send all locally buffered events to the API.'/>
+                        <button id='btnClearBuffer'
+                                label='Discard Buffer'
+                                imageMso='RecordsDeleteRecord'
+                                onAction='OnClearBufferClick'
+                                screentip='Delete all buffered events'
+                                supertip='Permanently deletes all buffered events.'/>
+                      </box>
                     </group>
+
+                    <group id='dgtLogoGroup' label=' '>
+                      <button id='btnDominoLogo'
+                              label='Domino&#xA;Data Lab'
+                              getImage='GetDominoLogo'
+                              size='large'
+                              onAction='OnDominoLogoClick'/>
+                    </group>
+
                   </tab>
                 </tabs>
               </ribbon>
@@ -141,11 +155,11 @@ namespace DominoGovernanceTracker.UI
                 switch (healthStatus)
                 {
                     case TrackingHealthStatus.Healthy:
-                        return "Tracking";
+                        return "Tracking\nActive";
                     case TrackingHealthStatus.Degraded:
-                        return "API Error";
+                        return "API\nError";
                     case TrackingHealthStatus.Inactive:
-                        return "Inactive";
+                        return "Tracking\nInactive";
                     default:
                         return "Unknown";
                 }
@@ -232,20 +246,54 @@ namespace DominoGovernanceTracker.UI
             }
         }
 
+        private Bitmap _dominoLogo;
+
+        public Bitmap GetDominoLogo(IRibbonControl control)
+        {
+            if (_dominoLogo == null)
+            {
+                lock (_bitmapLock)
+                {
+                    if (_dominoLogo == null)
+                    {
+                        try
+                        {
+                            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                            using (var stream = assembly.GetManifestResourceStream("DominoGovernanceTracker.dominologo.png"))
+                            {
+                                if (stream != null)
+                                    _dominoLogo = new Bitmap(stream);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning(ex, "Failed to load Domino logo");
+                        }
+                    }
+                }
+            }
+            return _dominoLogo;
+        }
+
+        public void OnDominoLogoClick(IRibbonControl control)
+        {
+            // No-op: logo is decorative
+        }
+
         public string GetEventCountLabel(IRibbonControl control)
         {
             try
             {
                 var addIn = AddIn.Instance;
                 if (addIn == null)
-                    return "Events: -";
+                    return "Events Captured:  0";
 
                 var count = addIn.GetCurrentWorkbookEventCount();
-                return $"Events: {count:N0}";
+                return $"Events Captured:  {count:N0}";
             }
             catch
             {
-                return "Events: Error";
+                return "Events Captured:  0";
             }
         }
 
@@ -398,37 +446,86 @@ namespace DominoGovernanceTracker.UI
             }
         }
 
-        public string GetModelStatusLabel(IRibbonControl control)
+        public string GetModelNameLabel(IRibbonControl control)
         {
             try
             {
                 var addIn = AddIn.Instance;
                 if (addIn?.ModelService == null)
-                    return "Model: -";
+                    return "Model:  --";
 
                 var app = (MSExcel.Application)ExcelDnaUtil.Application;
                 var wb = app.ActiveWorkbook;
                 if (wb == null)
-                    return "Model: No workbook";
+                    return "Model:  --";
 
-                var workbookName = wb.Name;
                 var modelService = addIn.ModelService;
-
-                if (modelService.IsWorkbookRegistered(workbookName))
+                if (modelService.IsWorkbookRegistered(wb.Name))
                 {
                     var modelName = modelService.GetWorkbookModelName(wb);
-                    var version = modelService.GetWorkbookVersion(wb);
-                    var display = !string.IsNullOrEmpty(modelName)
-                        ? $"{modelName} v{version}"
-                        : "Registered";
-                    return $"Model: {display}";
+                    return $"Model:  {(string.IsNullOrEmpty(modelName) ? "Registered" : modelName)}";
                 }
 
-                return "Model: Not Registered";
+                return "Model:  Unregistered";
             }
             catch
             {
-                return "Model: Error";
+                return "Model:  --";
+            }
+        }
+
+        public string GetVersionLabel(IRibbonControl control)
+        {
+            try
+            {
+                var addIn = AddIn.Instance;
+                if (addIn?.ModelService == null)
+                    return "Version:  --";
+
+                var app = (MSExcel.Application)ExcelDnaUtil.Application;
+                var wb = app.ActiveWorkbook;
+                if (wb == null)
+                    return "Version:  --";
+
+                var modelService = addIn.ModelService;
+                if (modelService.IsWorkbookRegistered(wb.Name))
+                {
+                    var version = modelService.GetWorkbookVersion(wb);
+                    return $"Version:  {version}";
+                }
+
+                return "Version:  --";
+            }
+            catch
+            {
+                return "Version:  --";
+            }
+        }
+
+        public string GetDateLabel(IRibbonControl control)
+        {
+            try
+            {
+                var addIn = AddIn.Instance;
+                if (addIn?.ModelService == null)
+                    return "Date:  --";
+
+                var app = (MSExcel.Application)ExcelDnaUtil.Application;
+                var wb = app.ActiveWorkbook;
+                if (wb == null)
+                    return "Date:  --";
+
+                var modelService = addIn.ModelService;
+                if (modelService.IsWorkbookRegistered(wb.Name))
+                {
+                    return $"Date:  {DateTime.Now:yyyy-MM-dd}";
+                }
+
+                return "Date:  --";
+            }
+            catch
+            {
+                return "Date:  --";
             }
         }
 
@@ -438,17 +535,17 @@ namespace DominoGovernanceTracker.UI
             {
                 var addIn = AddIn.Instance;
                 if (addIn?.Publisher?.Buffer == null)
-                    return "Buffered: -";
+                    return "Buffered Items:  0";
 
                 var count = addIn.Publisher.Buffer.GetBufferedEventCount();
                 if (count == 0)
-                    return "Buffered: 0";
+                    return "Buffered Items:  0";
 
-                return $"Buffered: {count:N0}";
+                return $"Buffered Items:  {count:N0}";
             }
             catch
             {
-                return "Buffered: Error";
+                return "Buffered Items:  0";
             }
         }
 
@@ -838,6 +935,7 @@ namespace DominoGovernanceTracker.UI
             _greenIndicator?.Dispose();
             _orangeIndicator?.Dispose();
             _grayIndicator?.Dispose();
+            _dominoLogo?.Dispose();
         }
     }
 }
