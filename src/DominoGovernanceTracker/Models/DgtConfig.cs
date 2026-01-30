@@ -63,6 +63,11 @@ namespace DominoGovernanceTracker.Models
         public int MaxBufferFileSizeMB { get; set; } = 50;
 
         /// <summary>
+        /// REST API endpoint for model registration
+        /// </summary>
+        public string ModelRegistrationEndpoint { get; set; } = "http://localhost:5000/api/models";
+
+        /// <summary>
         /// Gets the resolved local buffer path
         /// </summary>
         public string GetLocalBufferPath()

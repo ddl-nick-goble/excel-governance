@@ -6,8 +6,9 @@ from datetime import datetime
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import select, func, and_, or_, delete
+from sqlalchemy import select, func, and_, or_, delete, inspect
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from models.database import AuditEvent, AuditEventType
@@ -69,6 +70,7 @@ class EventRepository:
                     "details": event.details,
                     "error_message": event.error_message,
                     "correlation_id": event.correlation_id,
+                    "model_id": event.model_id,
                 }
                 for event in events
             ]
@@ -77,17 +79,33 @@ class EventRepository:
             for i in range(0, len(event_dicts), batch_size):
                 batch = event_dicts[i:i + batch_size]
 
-                # Use bulk_insert_mappings for maximum performance
-                self.session.add_all([AuditEvent(**event_dict) for event_dict in batch])
-                await self.session.flush()
+                # Use INSERT ... ON CONFLICT DO NOTHING for idempotent ingestion.
+                # The add-in's local buffer retries events after crash/restart,
+                # so duplicates are expected and should be skipped silently.
+                dialect_name = self.session.bind.dialect.name if self.session.bind else "sqlite"
+                if dialect_name == "sqlite":
+                    stmt = sqlite_insert(AuditEvent).values(batch).on_conflict_do_nothing(index_elements=["event_id"])
+                else:
+                    stmt = pg_insert(AuditEvent).values(batch).on_conflict_do_nothing(index_elements=["event_id"])
+                result = await self.session.execute(stmt)
+                inserted = result.rowcount if result.rowcount >= 0 else len(batch)
+                skipped = len(batch) - inserted
 
-                total_inserted += len(batch)
+                total_inserted += inserted
+
+                if skipped > 0:
+                    logger.debug(
+                        "bulk_insert_skipped_duplicates",
+                        batch_number=i // batch_size + 1,
+                        skipped=skipped,
+                    )
 
                 logger.debug(
                     "bulk_insert_batch_completed",
                     batch_number=i // batch_size + 1,
                     batch_size=len(batch),
-                    total_inserted=total_inserted
+                    inserted=inserted,
+                    total_inserted=total_inserted,
                 )
 
             await self.session.commit()

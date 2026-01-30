@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Live Excel Model Tracking</title>
+    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -120,9 +122,26 @@
             font-size: 0.7rem;
             text-transform: uppercase;
             letter-spacing: 0.3px;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
         }
 
-        .events-table th:nth-child(6) {
+        .events-table th:hover {
+            color: #333;
+        }
+
+        .events-table th .sort-arrow {
+            margin-left: 4px;
+            font-size: 0.6rem;
+            color: #bbb;
+        }
+
+        .events-table th .sort-arrow.active {
+            color: #2196F3;
+        }
+
+        .events-table th:nth-child(8) {
             width: 130px;
         }
 
@@ -223,6 +242,69 @@
             font-size: 0.75rem;
         }
 
+        /* Filter bar */
+        .filter-bar {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+            align-items: flex-end;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 140px;
+            flex: 1;
+            max-width: 220px;
+        }
+
+        .filter-group label {
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #888;
+            font-weight: 600;
+        }
+
+        .filter-group .ts-wrapper {
+            font-size: 0.72rem;
+        }
+
+        .filter-group .ts-wrapper .ts-control {
+            min-height: 26px;
+            padding: 1px 6px;
+            border-color: #ddd;
+        }
+
+        .filter-group .ts-wrapper .ts-control > .item {
+            font-size: 0.68rem;
+            padding: 0 4px;
+            margin: 1px 2px;
+        }
+
+        .filter-group .ts-dropdown {
+            font-size: 0.72rem;
+        }
+
+        .filter-clear-btn {
+            background: none;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            color: #888;
+            cursor: pointer;
+            font-size: 0.68rem;
+            padding: 4px 10px;
+            height: 28px;
+            white-space: nowrap;
+        }
+
+        .filter-clear-btn:hover {
+            background: #f5f5f5;
+            color: #333;
+        }
+
         @media (max-width: 1200px) {
             .metrics-grid {
                 grid-template-columns: repeat(3, 1fr);
@@ -259,8 +341,8 @@
             <div class="metrics-box">
                 <div class="metrics-grid">
                     <div class="metric">
-                        <span class="metric-label">Time since last update</span>
-                        <span class="metric-value" id="time-since-update">Loading...</span>
+                        <span class="metric-label">Registered Models</span>
+                        <span class="metric-value" id="total-models">Loading...</span>
                     </div>
                     <div class="metric">
                         <span class="metric-label">Total DB size</span>
@@ -293,6 +375,29 @@
                     <span id="refresh-text">Connecting...</span>
                 </div>
             </div>
+            <div id="filter-bar" class="filter-bar" style="display:none;">
+                <div class="filter-group">
+                    <label>Event Type</label>
+                    <select id="filter-event-type" multiple></select>
+                </div>
+                <div class="filter-group">
+                    <label>Model</label>
+                    <select id="filter-model" multiple></select>
+                </div>
+                <div class="filter-group">
+                    <label>Version</label>
+                    <select id="filter-version" multiple></select>
+                </div>
+                <div class="filter-group">
+                    <label>User</label>
+                    <select id="filter-user" multiple></select>
+                </div>
+                <div class="filter-group">
+                    <label>Workbook / Sheet</label>
+                    <select id="filter-workbook" multiple></select>
+                </div>
+                <button class="filter-clear-btn" id="filter-clear-btn">Clear Filters</button>
+            </div>
             <div id="error-container"></div>
             <div id="events-list">
                 <div class="no-events">Loading events...</div>
@@ -305,6 +410,36 @@
         let ws = null;
         let reconnectTimer = null;
         let knownEventIds = new Set();
+
+        // All events stored for filtering/sorting
+        let allEvents = [];
+        let sortColumn = 'timestamp';
+        let sortDirection = 'desc'; // 'asc' or 'desc'
+        let activeFilters = {};
+
+        // Tom Select instances
+        let filterInstances = {};
+
+        // Column definitions for sorting/filtering
+        const COLUMNS = [
+            { key: 'event_type_display', label: 'Event Type' },
+            { key: 'model_name', label: 'Model' },
+            { key: 'model_version', label: 'Version' },
+            { key: 'user_display', label: 'User' },
+            { key: 'workbook_display', label: 'Workbook / Sheet' },
+            { key: 'location_display', label: 'Location' },
+            { key: 'change_display', label: 'Change' },
+            { key: 'timestamp', label: 'Time' },
+        ];
+
+        // Filter column key -> select element ID mapping
+        const FILTER_MAP = {
+            'event_type_display': 'filter-event-type',
+            'model_name': 'filter-model',
+            'model_version': 'filter-version',
+            'user_display': 'filter-user',
+            'workbook_display': 'filter-workbook',
+        };
 
         function connectWebSocket() {
             try {
@@ -333,7 +468,6 @@
                 ws.onclose = () => {
                     console.log('WebSocket closed, reconnecting...');
                     updateConnectionStatus('disconnected');
-                    // Reconnect after 3 seconds
                     reconnectTimer = setTimeout(connectWebSocket, 3000);
                 };
             } catch (error) {
@@ -345,14 +479,57 @@
 
         function handleWebSocketMessage(data) {
             if (data.type === 'initial') {
-                // Initial load - replace all events
                 updateMetrics(data.metrics);
-                setEvents(data.events);
+                allEvents = (data.events || []).map(enrichEvent);
+                knownEventIds = new Set(allEvents.map(e => e.event_id));
+                initFilters();
+                renderTable();
             } else if (data.type === 'update') {
-                // New events - prepend to list
                 updateMetrics(data.metrics);
-                prependNewEvents(data.events);
+                const newEvents = (data.events || [])
+                    .filter(e => !knownEventIds.has(e.event_id))
+                    .map(enrichEvent);
+                if (newEvents.length > 0) {
+                    newEvents.forEach(e => knownEventIds.add(e.event_id));
+                    allEvents = [...newEvents, ...allEvents].slice(0, 500);
+                    updateFilterOptions();
+                    renderTable();
+                }
             }
+        }
+
+        function enrichEvent(event) {
+            // Pre-compute display strings for filtering/sorting
+            event.user_display = event.user_name
+                ? `${event.user_name}${event.machine_name ? ' @ ' + event.machine_name : ''}`
+                : '';
+            event.workbook_display = event.workbook_name
+                ? `${event.workbook_name}${event.sheet_name ? ' / ' + event.sheet_name : ''}`
+                : '';
+            let loc = '';
+            if (event.cell_address) {
+                loc = event.cell_address;
+                if (event.cell_count && event.cell_count > 1) loc += ` (${event.cell_count})`;
+            }
+            event.location_display = loc;
+
+            // Change display for sorting (text-only version)
+            if (event.old_value !== null || event.new_value !== null) {
+                event.change_display = `${event.old_value || '(empty)'} → ${event.new_value || '(empty)'}`;
+            } else if (event.formula) {
+                event.change_display = event.formula;
+            } else if (event.details) {
+                event.change_display = event.details;
+            } else {
+                event.change_display = '';
+            }
+
+            // Normalize nulls to empty string for filter matching
+            if (!event.model_name) event.model_name = '';
+            if (event.model_version == null) event.model_version = '';
+            else event.model_version = String(event.model_version);
+
+            return event;
         }
 
         function updateConnectionStatus(status) {
@@ -372,141 +549,213 @@
         }
 
         function updateMetrics(metrics) {
-            // Time since last update
-            const timeSinceUpdate = metrics.time_since_last_update
-                ? metrics.time_since_last_update.human_readable
-                : 'No events yet';
-            document.getElementById('time-since-update').textContent = timeSinceUpdate;
+            document.getElementById('total-models').textContent = formatNumber(metrics.total_registered_models || 0);
 
-            // DB size
             const dbSize = metrics.db_size
                 ? metrics.db_size.human_readable
                 : '0 B';
             document.getElementById('db-size').textContent = dbSize;
-
-            // Cells changed
             document.getElementById('cells-changed').textContent = formatNumber(metrics.total_cells_changed || 0);
-
-            // Total workbooks
             document.getElementById('total-workbooks').textContent = formatNumber(metrics.total_workbooks || 0);
-
-            // Total sheets
             document.getElementById('total-sheets').textContent = formatNumber(metrics.total_sheets || 0);
-
-            // Total events
             document.getElementById('total-events').textContent = formatNumber(metrics.total_events || 0);
         }
 
-        function setEvents(events) {
-            const eventsList = document.getElementById('events-list');
-            knownEventIds.clear();
+        // ---- Filtering ----
 
-            if (!events || events.length === 0) {
+        function initFilters() {
+            document.getElementById('filter-bar').style.display = 'flex';
+
+            // Destroy old instances
+            Object.values(filterInstances).forEach(inst => inst.destroy());
+            filterInstances = {};
+
+            for (const [colKey, selectId] of Object.entries(FILTER_MAP)) {
+                const el = document.getElementById(selectId);
+                el.innerHTML = '';
+                const options = getContextualValues(colKey);
+                options.forEach(val => {
+                    const opt = document.createElement('option');
+                    opt.value = val;
+                    opt.textContent = val;
+                    el.appendChild(opt);
+                });
+
+                filterInstances[colKey] = new TomSelect('#' + selectId, {
+                    plugins: ['remove_button'],
+                    maxItems: null,
+                    hidePlaceholder: true,
+                    onItemAdd: function() {
+                        this.setTextboxValue('');
+                        this.refreshOptions(false);
+                    },
+                    onChange: (values) => {
+                        if (values && values.length > 0) {
+                            activeFilters[colKey] = new Set(values);
+                        } else {
+                            delete activeFilters[colKey];
+                        }
+                        refreshFilterOptions();
+                        renderTable();
+                    }
+                });
+            }
+
+            document.getElementById('filter-clear-btn').addEventListener('click', () => {
+                activeFilters = {};
+                Object.values(filterInstances).forEach(inst => inst.clear(true));
+                refreshFilterOptions();
+                renderTable();
+            });
+        }
+
+        function updateFilterOptions() {
+            refreshFilterOptions();
+        }
+
+        function refreshFilterOptions() {
+            // For each filter, compute available options based on events
+            // filtered by all OTHER active filters (cross-filtering).
+            for (const [colKey, selectId] of Object.entries(FILTER_MAP)) {
+                const inst = filterInstances[colKey];
+                if (!inst) continue;
+
+                const available = getContextualValues(colKey);
+                const currentSelection = new Set(inst.getValue() || []);
+
+                // Sync options: add missing, remove stale
+                const desiredKeys = new Set(available);
+                // Add currently selected values so they aren't removed
+                currentSelection.forEach(v => desiredKeys.add(v));
+
+                // Remove options that are no longer relevant
+                for (const key of Object.keys(inst.options)) {
+                    if (!desiredKeys.has(key)) {
+                        inst.removeOption(key, true);
+                    }
+                }
+                // Add new options
+                available.forEach(val => {
+                    if (!inst.options[val]) {
+                        inst.addOption({ value: val, text: val });
+                    }
+                });
+                inst.refreshOptions(false);
+            }
+        }
+
+        function getContextualValues(colKey) {
+            // Get unique non-empty values for colKey from events that pass
+            // all filters EXCEPT the one for colKey.
+            const vals = new Set();
+            allEvents.forEach(e => {
+                // Check all other filters
+                let pass = true;
+                for (const [filterCol, allowedSet] of Object.entries(activeFilters)) {
+                    if (filterCol === colKey) continue;
+                    const val = String(e[filterCol] || '');
+                    if (!allowedSet.has(val)) { pass = false; break; }
+                }
+                if (pass) {
+                    const v = e[colKey];
+                    if (v !== undefined && v !== null && v !== '') vals.add(String(v));
+                }
+            });
+            return [...vals].sort((a, b) => a.localeCompare(b));
+        }
+
+        function applyFilters(events) {
+            if (Object.keys(activeFilters).length === 0) return events;
+            return events.filter(event => {
+                for (const [colKey, allowedSet] of Object.entries(activeFilters)) {
+                    const val = String(event[colKey] || '');
+                    if (!allowedSet.has(val)) return false;
+                }
+                return true;
+            });
+        }
+
+        // ---- Sorting ----
+
+        function applySort(events) {
+            const col = sortColumn;
+            const dir = sortDirection === 'asc' ? 1 : -1;
+            return [...events].sort((a, b) => {
+                let va = a[col] || '';
+                let vb = b[col] || '';
+                if (col === 'timestamp') {
+                    return dir * (new Date(va) - new Date(vb));
+                }
+                if (col === 'model_version') {
+                    const na = parseFloat(va) || 0;
+                    const nb = parseFloat(vb) || 0;
+                    return dir * (na - nb);
+                }
+                va = String(va).toLowerCase();
+                vb = String(vb).toLowerCase();
+                if (va < vb) return -1 * dir;
+                if (va > vb) return 1 * dir;
+                return 0;
+            });
+        }
+
+        function handleSort(colKey) {
+            if (sortColumn === colKey) {
+                sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortColumn = colKey;
+                sortDirection = 'asc';
+            }
+            renderTable();
+        }
+
+        // ---- Rendering ----
+
+        function renderTable() {
+            const eventsList = document.getElementById('events-list');
+
+            if (allEvents.length === 0) {
                 eventsList.innerHTML = '<div class="no-events">No events recorded yet. Start using Excel with the add-in enabled!</div>';
                 return;
             }
 
-            // Store event IDs
-            events.forEach(event => knownEventIds.add(event.event_id));
+            let filtered = applyFilters(allEvents);
+            let sorted = applySort(filtered);
 
-            // Create table
-            const tableHTML = `
+            const headerCells = COLUMNS.map(col => {
+                const arrow = sortColumn === col.key
+                    ? (sortDirection === 'asc' ? '▲' : '▼')
+                    : '⇅';
+                const activeClass = sortColumn === col.key ? ' active' : '';
+                return `<th data-sort="${col.key}">${col.label}<span class="sort-arrow${activeClass}">${arrow}</span></th>`;
+            }).join('');
+
+            const rows = sorted.length > 0
+                ? sorted.map(event => createEventRow(event)).join('')
+                : '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px;">No events match the current filters.</td></tr>';
+
+            eventsList.innerHTML = `
                 <table class="events-table">
-                    <thead>
-                        <tr>
-                            <th>Event Type</th>
-                            <th>User</th>
-                            <th>Workbook / Sheet</th>
-                            <th>Location</th>
-                            <th>Change</th>
-                            <th>Time</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${events.map(event => createEventRow(event)).join('')}
-                    </tbody>
+                    <thead><tr>${headerCells}</tr></thead>
+                    <tbody>${rows}</tbody>
                 </table>
             `;
-            eventsList.innerHTML = tableHTML;
-        }
 
-        function prependNewEvents(events) {
-            if (!events || events.length === 0) return;
-
-            const eventsList = document.getElementById('events-list');
-
-            // Filter out events we already have
-            const newEvents = events.filter(event => !knownEventIds.has(event.event_id));
-
-            if (newEvents.length === 0) return;
-
-            // Add new event IDs to known set
-            newEvents.forEach(event => knownEventIds.add(event.event_id));
-
-            // Remove "no events" message if present
-            const noEventsMsg = eventsList.querySelector('.no-events');
-            if (noEventsMsg) {
-                // Create table first
-                const tableHTML = `
-                    <table class="events-table">
-                        <thead>
-                            <tr>
-                                <th>Event Type</th>
-                                <th>User</th>
-                                <th>Workbook / Sheet</th>
-                                <th>Location</th>
-                                <th>Change</th>
-                                <th>Time</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${newEvents.map(event => createEventRow(event)).join('')}
-                        </tbody>
-                    </table>
-                `;
-                eventsList.innerHTML = tableHTML;
-                return;
-            }
-
-            // Find tbody and prepend rows
-            const tbody = eventsList.querySelector('tbody');
-            if (tbody) {
-                const newRowsHTML = newEvents.map(event => createEventRow(event)).join('');
-                tbody.insertAdjacentHTML('afterbegin', newRowsHTML);
-
-                // Limit total events shown (keep most recent 100)
-                const allRows = tbody.querySelectorAll('tr');
-                if (allRows.length > 100) {
-                    for (let i = 100; i < allRows.length; i++) {
-                        allRows[i].remove();
-                    }
-                }
-            }
+            // Attach sort handlers
+            eventsList.querySelectorAll('th[data-sort]').forEach(th => {
+                th.addEventListener('click', () => handleSort(th.dataset.sort));
+            });
         }
 
         function createEventRow(event) {
             const timeStr = formatTimestamp(event.timestamp);
+            const userInfo = event.user_display ? escapeHtml(event.user_display) : '-';
+            const workbookInfo = event.workbook_display ? escapeHtml(event.workbook_display) : '-';
+            const locationInfo = event.location_display ? escapeHtml(event.location_display) : '-';
+            const modelName = event.model_name ? escapeHtml(event.model_name) : '-';
+            const modelVersion = event.model_version ? escapeHtml(String(event.model_version)) : '-';
 
-            // User info
-            const userInfo = event.user_name
-                ? `${escapeHtml(event.user_name)}${event.machine_name ? ` @ ${escapeHtml(event.machine_name)}` : ''}`
-                : '-';
-
-            // Workbook info
-            const workbookInfo = event.workbook_name
-                ? `${escapeHtml(event.workbook_name)}${event.sheet_name ? ` / ${escapeHtml(event.sheet_name)}` : ''}`
-                : '-';
-
-            // Location info
-            let locationInfo = '-';
-            if (event.cell_address) {
-                locationInfo = escapeHtml(event.cell_address);
-                if (event.cell_count && event.cell_count > 1) {
-                    locationInfo += ` (${event.cell_count})`;
-                }
-            }
-
-            // Change info
+            // Change info (HTML version)
             let changeInfo = '-';
             if (event.old_value !== null || event.new_value !== null) {
                 const oldVal = event.old_value || '(empty)';
@@ -521,6 +770,8 @@
             return `
                 <tr>
                     <td class="event-type-cell">${escapeHtml(event.event_type_display)}</td>
+                    <td class="event-workbook-cell">${modelName}</td>
+                    <td class="event-workbook-cell">${modelVersion}</td>
                     <td class="event-user-cell">${userInfo}</td>
                     <td class="event-workbook-cell" title="${workbookInfo}">${workbookInfo}</td>
                     <td class="event-location-cell">${locationInfo}</td>
@@ -578,26 +829,23 @@
                     const newText = formatTimestamp(timestamp);
                     cell.textContent = newText;
 
-                    // Track minimum age for smart interval
                     const date = new Date(timestamp);
-                    const age = (new Date() - date) / 1000; // age in seconds
+                    const age = (new Date() - date) / 1000;
                     minAge = Math.min(minAge, age);
                 }
             });
 
-            // Adaptive update interval based on age of most recent event
             let nextInterval;
             if (minAge < 60) {
-                nextInterval = 1000; // Update every second for recent events
+                nextInterval = 1000;
             } else if (minAge < 3600) {
-                nextInterval = 10000; // Every 10 seconds for events < 1 hour
+                nextInterval = 10000;
             } else if (minAge < 86400) {
-                nextInterval = 60000; // Every minute for events < 1 day
+                nextInterval = 60000;
             } else {
-                nextInterval = 300000; // Every 5 minutes for older events
+                nextInterval = 300000;
             }
 
-            // Restart with new interval if it changed
             if (timestampUpdateInterval) {
                 clearInterval(timestampUpdateInterval);
             }
@@ -607,22 +855,14 @@
         // Start WebSocket connection when page loads
         window.addEventListener('DOMContentLoaded', () => {
             connectWebSocket();
-
-            // Start timestamp updates
             timestampUpdateInterval = setInterval(updateAllTimestamps, 1000);
         });
 
         // Clean up on page unload
         window.addEventListener('beforeunload', () => {
-            if (reconnectTimer) {
-                clearTimeout(reconnectTimer);
-            }
-            if (timestampUpdateInterval) {
-                clearInterval(timestampUpdateInterval);
-            }
-            if (ws) {
-                ws.close();
-            }
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            if (timestampUpdateInterval) clearInterval(timestampUpdateInterval);
+            if (ws) ws.close();
         });
     </script>
 </body>

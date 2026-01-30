@@ -50,6 +50,9 @@ class AuditEventBase(BaseModel):
     error_message: Optional[str] = Field(None, alias="errorMessage", description="Error message for error events")
     correlation_id: Optional[str] = Field(None, alias="correlationId", max_length=255, description="Correlation ID")
 
+    # Model registration
+    model_id: Optional[str] = Field(None, alias="modelId", max_length=255, description="Registered model ID")
+
     model_config = ConfigDict(populate_by_name=True)
 
     @field_validator('timestamp', mode='after')
@@ -256,3 +259,44 @@ class UserActivitySummary(BaseModel):
     first_activity: datetime
     last_activity: datetime
     events_by_type: dict[str, int]
+
+
+# ============================================================================
+# Model Registration Schemas
+# ============================================================================
+
+class ModelRegistrationRequest(BaseModel):
+    """Request to register or re-register a workbook model."""
+    model_name: str = Field(
+        ..., alias="modelName", min_length=1, max_length=500,
+        description="Model name (locked after first registration)"
+    )
+    description: Optional[str] = Field(None, description="Model description")
+    registered_by: str = Field(
+        ..., alias="registeredBy", max_length=255,
+        description="User performing registration"
+    )
+    machine_name: Optional[str] = Field(
+        None, alias="machineName", max_length=255,
+        description="Machine where registration is performed"
+    )
+    existing_model_id: Optional[str] = Field(
+        None, alias="existingModelId", max_length=255,
+        description="If re-registering, the current model ID (triggers version increment/fork)"
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ModelResponse(BaseModel):
+    """Response with registered model details."""
+    model_id: str = Field(..., alias="modelId")
+    model_name: str = Field(..., alias="modelName")
+    description: Optional[str] = None
+    version: int
+    registered_by: str = Field(..., alias="registeredBy")
+    machine_name: Optional[str] = Field(None, alias="machineName")
+    is_active: bool = Field(..., alias="isActive")
+    created_at: datetime = Field(..., alias="createdAt")
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)

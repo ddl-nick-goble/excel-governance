@@ -12,7 +12,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.database import get_session, db_manager
-from models.database import AuditEvent, AuditEventType
+from models.database import AuditEvent, AuditEventType, RegisteredModel
 from infrastructure.logger import get_logger
 
 logger = get_logger(__name__)
@@ -105,25 +105,12 @@ async def get_live_data(
         recent_events_result = await session.execute(recent_events_stmt)
         recent_events = recent_events_result.scalars().all()
 
+        # Build model_id -> model_name map
+        model_name_map = await _get_model_info_map(session, recent_events)
+
         # Format events for response
         events_list = [
-            {
-                "event_id": str(event.event_id),
-                "timestamp": (event.timestamp.replace(tzinfo=timezone.utc) if event.timestamp.tzinfo is None else event.timestamp).isoformat(),
-                "event_type": event.event_type.name,
-                "event_type_display": format_event_type(event.event_type),
-                "user_name": event.user_name,
-                "machine_name": event.machine_name,
-                "workbook_name": event.workbook_name,
-                "sheet_name": event.sheet_name,
-                "cell_address": event.cell_address,
-                "cell_count": event.cell_count,
-                "old_value": truncate_value(event.old_value, 100),
-                "new_value": truncate_value(event.new_value, 100),
-                "formula": truncate_value(event.formula, 100),
-                "details": event.details,
-                "error_message": event.error_message,
-            }
+            _serialize_event(event, model_name_map)
             for event in recent_events
         ]
 
@@ -143,6 +130,46 @@ async def get_live_data(
     except Exception as e:
         logger.error("dashboard_data_error", error=str(e), exc_info=True)
         raise
+
+
+async def _get_model_info_map(session: AsyncSession, events: list) -> dict[str, dict]:
+    """Build a mapping of model_id -> {model_name, version} for the given events."""
+    model_ids = {e.model_id for e in events if e.model_id}
+    if not model_ids:
+        return {}
+    stmt = (
+        select(RegisteredModel.model_id, RegisteredModel.model_name, RegisteredModel.version)
+        .where(RegisteredModel.model_id.in_(model_ids))
+    )
+    result = await session.execute(stmt)
+    return {
+        row.model_id: {"model_name": row.model_name, "version": row.version}
+        for row in result
+    }
+
+
+def _serialize_event(event: AuditEvent, model_info_map: dict[str, dict]) -> dict:
+    """Serialize an AuditEvent to a dict for the dashboard."""
+    model_info = model_info_map.get(event.model_id, {}) if event.model_id else {}
+    return {
+        "event_id": str(event.event_id),
+        "timestamp": (event.timestamp.replace(tzinfo=timezone.utc) if event.timestamp.tzinfo is None else event.timestamp).isoformat(),
+        "event_type": event.event_type.name,
+        "event_type_display": format_event_type(event.event_type),
+        "model_name": model_info.get("model_name"),
+        "model_version": model_info.get("version"),
+        "user_name": event.user_name,
+        "machine_name": event.machine_name,
+        "workbook_name": event.workbook_name,
+        "sheet_name": event.sheet_name,
+        "cell_address": event.cell_address,
+        "cell_count": event.cell_count,
+        "old_value": truncate_value(event.old_value, 100),
+        "new_value": truncate_value(event.new_value, 100),
+        "formula": truncate_value(event.formula, 100),
+        "details": event.details,
+        "error_message": event.error_message,
+    }
 
 
 def get_database_size() -> dict:
@@ -217,48 +244,13 @@ async def get_events_since(session: AsyncSession, since_timestamp: Optional[date
     result = await session.execute(stmt)
     events = result.scalars().all()
 
-    # Format events
-    return [
-        {
-            "event_id": str(event.event_id),
-            "timestamp": (event.timestamp.replace(tzinfo=timezone.utc) if event.timestamp.tzinfo is None else event.timestamp).isoformat(),
-            "event_type": event.event_type.name,
-            "event_type_display": format_event_type(event.event_type),
-            "user_name": event.user_name,
-            "machine_name": event.machine_name,
-            "workbook_name": event.workbook_name,
-            "sheet_name": event.sheet_name,
-            "cell_address": event.cell_address,
-            "cell_count": event.cell_count,
-            "old_value": truncate_value(event.old_value, 100),
-            "new_value": truncate_value(event.new_value, 100),
-            "formula": truncate_value(event.formula, 100),
-            "details": event.details,
-            "error_message": event.error_message,
-        }
-        for event in events
-    ]
+    # Build model name map and format events
+    model_name_map = await _get_model_info_map(session, events)
+    return [_serialize_event(event, model_name_map) for event in events]
 
 
 async def get_metrics_data(session: AsyncSession) -> dict:
     """Get current metrics for the dashboard."""
-    # Get most recent event timestamp
-    most_recent_stmt = select(func.max(AuditEvent.timestamp))
-    most_recent_result = await session.execute(most_recent_stmt)
-    most_recent_timestamp = most_recent_result.scalar_one_or_none()
-
-    # Calculate time since last update
-    time_since_last_update = None
-    if most_recent_timestamp:
-        if most_recent_timestamp.tzinfo is None:
-            most_recent_timestamp = most_recent_timestamp.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        delta = now - most_recent_timestamp
-        time_since_last_update = {
-            "seconds": int(delta.total_seconds()),
-            "human_readable": format_time_delta(delta)
-        }
-
     # Get total event count
     total_events_stmt = select(func.count()).select_from(AuditEvent)
     total_events_result = await session.execute(total_events_stmt)
@@ -293,11 +285,16 @@ async def get_metrics_data(session: AsyncSession) -> dict:
     total_sheets_result = await session.execute(total_sheets_stmt)
     total_sheets = total_sheets_result.scalar_one()
 
+    # Get total registered models (unique model names)
+    total_models_stmt = select(func.count(func.distinct(RegisteredModel.model_name)))
+    total_models_result = await session.execute(total_models_stmt)
+    total_registered_models = total_models_result.scalar_one()
+
     # Get database size
     db_size = get_database_size()
 
     return {
-        "time_since_last_update": time_since_last_update,
+        "total_registered_models": total_registered_models,
         "total_events": total_events,
         "total_cells_changed": total_cells_changed,
         "total_workbooks": total_workbooks,

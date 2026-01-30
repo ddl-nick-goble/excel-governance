@@ -1,7 +1,7 @@
 # Domino Governance Tracker (DGT) Backend API Specification
 
-**Version:** 1.0
-**Last Updated:** 2025-12-14
+**Version:** 1.1
+**Last Updated:** 2026-01-30
 **Purpose:** Complete specification for building a production-ready backend API that receives audit events from the DGT Excel-DNA add-in
 
 ---
@@ -27,7 +27,7 @@
 
 The DGT Backend API is a high-reliability REST API that receives audit events from Excel-DNA add-in clients. It must handle:
 
-- **Volume:** Up to 100 events per request, every 10 seconds per client
+- **Volume:** Up to 1000 events per request, flush interval configurable per client
 - **Reliability:** 99.9% uptime target, self-healing client expects eventual consistency
 - **Resilience:** Client implements exponential backoff retry (3 attempts) and circuit breaker (50% failure rate)
 - **Performance:** Response time <1s for batches of 100 events
@@ -37,9 +37,9 @@ The DGT Backend API is a high-reliability REST API that receives audit events fr
 
 - **Single Primary Endpoint:** `POST /api/events`
 - **Authentication:** API Key via `X-API-Key` header
-- **Data Format:** JSON array of AuditEvent objects
-- **Success Criteria:** Any HTTP 2xx status code
-- **Idempotency:** Required - duplicate eventIds should not create duplicate records
+- **Data Format:** JSON object with `events` array (batch wrapper): `{"events": [...]}`
+- **Success Criteria:** HTTP 202 Accepted
+- **Idempotency:** Required - uses `INSERT ... ON CONFLICT DO NOTHING` on `event_id` primary key
 - **Health Check:** `GET /health` endpoint for client monitoring
 
 ---
@@ -87,11 +87,7 @@ paths:
         content:
           application/json:
             schema:
-              type: array
-              minItems: 1
-              maxItems: 100
-              items:
-                $ref: '#/components/schemas/AuditEvent'
+              $ref: '#/components/schemas/AuditEventBatch'
             examples:
               singleCellChange:
                 summary: Single cell change event
@@ -162,28 +158,17 @@ paths:
                     oldValue: "100"
                     newValue: "200"
       responses:
-        '200':
-          description: Events successfully received and stored
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EventsResponse'
-              example:
-                received: 42
-                stored: 40
-                duplicates: 2
-        '201':
-          description: Events successfully created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EventsResponse'
         '202':
           description: Events accepted for processing
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EventsResponse'
+                $ref: '#/components/schemas/BatchIngestResponse'
+              example:
+                accepted: 42
+                rejected: 0
+                errors: []
+                processing_time_ms: 45.2
         '400':
           description: Invalid request (malformed JSON, missing required fields, batch too large)
           content:
@@ -440,50 +425,76 @@ components:
           example: null
           maxLength: 255
           nullable: true
+        modelId:
+          type: string
+          description: Registered model ID (set when workbook is registered via Model Registration)
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+          maxLength: 255
+          nullable: true
 
     AuditEventType:
-      type: string
-      description: Type of audit event
+      type: integer
+      description: |
+        Type of audit event. Sent as integer values matching the C# enum ordinals.
+        The backend Python enum mirrors these values exactly.
       enum:
-        # Workbook events
-        - WorkbookNew        # New workbook created
-        - WorkbookOpen       # Workbook opened
-        - WorkbookClose      # Workbook closed
-        - WorkbookSave       # Workbook saved
-        - WorkbookActivate   # Workbook activated (switched to)
-        - WorkbookDeactivate # Workbook deactivated (switched away)
-        # Cell/Sheet events
-        - CellChange         # Cell value changed (MOST COMMON - 80%+ of events)
-        - SelectionChange    # Cell selection changed (if enabled, can be noisy)
-        - SheetAdd           # Sheet added to workbook
-        - SheetDelete        # Sheet deleted
-        - SheetRename        # Sheet renamed
-        - SheetActivate      # Sheet activated
-        # System events
-        - SessionStart       # Excel session started
-        - SessionEnd         # Excel session ended
-        - AddInLoad          # Add-in loaded
-        - AddInUnload        # Add-in unloaded
-        - Error              # Error occurred
+        - 0   # WorkbookNew - New workbook created
+        - 1   # WorkbookOpen - Workbook opened
+        - 2   # WorkbookClose - Workbook closed
+        - 3   # WorkbookSave - Workbook saved
+        - 4   # WorkbookActivate - Workbook activated (switched to)
+        - 5   # WorkbookDeactivate - Workbook deactivated (switched away)
+        - 6   # CellChange - Cell value changed (MOST COMMON - 80%+ of events)
+        - 7   # SelectionChange - Cell selection changed (if enabled, can be noisy)
+        - 8   # SheetAdd - Sheet added to workbook
+        - 9   # SheetDelete - Sheet deleted
+        - 10  # SheetRename - Sheet renamed
+        - 11  # SheetActivate - Sheet activated
+        - 12  # SessionStart - Excel session started
+        - 13  # SessionEnd - Excel session ended
+        - 14  # AddInLoad - Add-in loaded
+        - 15  # AddInUnload - Add-in unloaded
+        - 16  # Error - Error occurred
+        - 17  # ModelRegistration - Workbook registered as a model
 
-    EventsResponse:
+    AuditEventBatch:
       type: object
       required:
-        - received
-        - stored
+        - events
       properties:
-        received:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+          description: Array of audit events to ingest
+
+    BatchIngestResponse:
+      type: object
+      required:
+        - accepted
+        - rejected
+        - processing_time_ms
+      properties:
+        accepted:
           type: integer
-          description: Number of events received in the request
+          description: Number of events successfully inserted (duplicates are silently skipped)
           example: 42
-        stored:
+        rejected:
           type: integer
-          description: Number of events successfully stored (may be less than received due to duplicates)
-          example: 40
-        duplicates:
-          type: integer
-          description: Number of duplicate events detected (by eventId)
-          example: 2
+          description: Number of events that failed validation or insertion
+          example: 0
+        errors:
+          type: array
+          items:
+            type: string
+          description: Error messages for rejected events
+          example: []
+        processing_time_ms:
+          type: number
+          description: Server-side processing time in milliseconds
+          example: 45.2
 
     ErrorResponse:
       type: object
@@ -566,28 +577,32 @@ components:
 | `details` | String | Optional | 4000 | Yes | Additional information | Any |
 | `errorMessage` | String | Optional | 4000 | Yes | Error message | Error events |
 | `correlationId` | String | Optional | 255 | Yes | Link related events | Any |
+| `modelId` | String | Optional | 255 | Yes | Registered model ID | All (set for registered workbooks) |
 
 ### AuditEventType Enum Values
 
-```
-WorkbookNew         - New workbook created
-WorkbookOpen        - Workbook opened
-WorkbookClose       - Workbook closed
-WorkbookSave        - Workbook saved
-WorkbookActivate    - Workbook activated (switched to)
-WorkbookDeactivate  - Workbook deactivated (switched away)
-CellChange          - Cell value changed (MOST COMMON - 80%+ of events)
-SelectionChange     - Cell selection changed (if enabled, can be noisy)
-SheetAdd            - Sheet added to workbook
-SheetDelete         - Sheet deleted
-SheetRename         - Sheet renamed
-SheetActivate       - Sheet activated
-SessionStart        - Excel session started
-SessionEnd          - Excel session ended
-AddInLoad           - Add-in loaded
-AddInUnload         - Add-in unloaded
-Error               - Error occurred
-```
+Event types are serialized as **integers** matching C# enum ordinals. The backend Python `AuditEventType(int, Enum)` mirrors these values exactly.
+
+| Value | C# Name | Python Name | Description |
+|-------|---------|-------------|-------------|
+| 0 | WorkbookNew | WORKBOOK_NEW | New workbook created |
+| 1 | WorkbookOpen | WORKBOOK_OPEN | Workbook opened |
+| 2 | WorkbookClose | WORKBOOK_CLOSE | Workbook closed |
+| 3 | WorkbookSave | WORKBOOK_SAVE | Workbook saved |
+| 4 | WorkbookActivate | WORKBOOK_ACTIVATE | Workbook activated (switched to) |
+| 5 | WorkbookDeactivate | WORKBOOK_DEACTIVATE | Workbook deactivated (switched away) |
+| 6 | CellChange | CELL_CHANGE | Cell value changed (MOST COMMON - 80%+ of events) |
+| 7 | SelectionChange | SELECTION_CHANGE | Cell selection changed (if enabled, can be noisy) |
+| 8 | SheetAdd | SHEET_ADD | Sheet added to workbook |
+| 9 | SheetDelete | SHEET_DELETE | Sheet deleted |
+| 10 | SheetRename | SHEET_RENAME | Sheet renamed |
+| 11 | SheetActivate | SHEET_ACTIVATE | Sheet activated |
+| 12 | SessionStart | SESSION_START | Excel session started |
+| 13 | SessionEnd | SESSION_END | Excel session ended |
+| 14 | AddInLoad | ADDIN_LOAD | Add-in loaded |
+| 15 | AddInUnload | ADDIN_UNLOAD | Add-in unloaded |
+| 16 | Error | ERROR | Error occurred |
+| 17 | ModelRegistration | MODEL_REGISTRATION | Workbook registered/re-registered as a model |
 
 ### Data Volume Estimates
 
@@ -605,8 +620,8 @@ Based on typical usage patterns:
 
 **Batch Characteristics:**
 - Average batch size: 10-50 events
-- Maximum batch size: 100 events (enforced by client)
-- Batch frequency: Every 10 seconds (configurable)
+- Maximum batch size: 1000 events (enforced by client config `MaxBufferSize`)
+- Batch frequency: Configurable via `FlushIntervalSeconds` (default varies)
 
 ---
 
@@ -644,19 +659,10 @@ CREATE TABLE audit_events (
     details TEXT,
     error_message TEXT,
     correlation_id VARCHAR(255),
+    model_id VARCHAR(255),       -- Registered model ID (FK to registered_models)
 
     -- Server-side Fields
-    received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    processed BOOLEAN NOT NULL DEFAULT FALSE,
-
-    -- Indexes (defined below)
-    CONSTRAINT valid_event_type CHECK (event_type IN (
-        'WorkbookNew', 'WorkbookOpen', 'WorkbookClose', 'WorkbookSave',
-        'WorkbookActivate', 'WorkbookDeactivate', 'CellChange',
-        'SelectionChange', 'SheetAdd', 'SheetDelete', 'SheetRename',
-        'SheetActivate', 'SessionStart', 'SessionEnd', 'AddInLoad',
-        'AddInUnload', 'Error'
-    ))
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 -- Critical Indexes for Performance
@@ -670,11 +676,14 @@ CREATE INDEX idx_events_received_at ON audit_events(received_at DESC);
 
 -- Composite Indexes for Common Queries
 CREATE INDEX idx_events_user_timestamp ON audit_events(user_name, timestamp DESC);
-CREATE INDEX idx_events_workbook_timestamp ON audit_events(workbook_path, timestamp DESC) WHERE workbook_path IS NOT NULL;
+CREATE INDEX idx_events_workbook_timestamp ON audit_events(workbook_name, timestamp DESC);
 CREATE INDEX idx_events_session_timestamp ON audit_events(session_id, timestamp DESC);
 
--- Partial Index for Unprocessed Events (if async processing used)
-CREATE INDEX idx_events_unprocessed ON audit_events(received_at) WHERE processed = FALSE;
+-- Model tracking
+CREATE INDEX idx_events_model_timestamp ON audit_events(model_id, timestamp DESC) WHERE model_id IS NOT NULL;
+
+-- Correlation tracking
+CREATE INDEX idx_events_correlation ON audit_events(correlation_id, timestamp DESC) WHERE correlation_id IS NOT NULL;
 ```
 
 ### Partitioning Strategy (Optional but Recommended)
@@ -715,36 +724,40 @@ DELETE FROM audit_events
 WHERE timestamp < NOW() - INTERVAL '1 year';
 ```
 
-### Supporting Tables (Optional)
+### Supporting Tables
 
 **Session tracking:**
 ```sql
 CREATE TABLE sessions (
     session_id VARCHAR(255) PRIMARY KEY,
-    user_name VARCHAR(255) NOT NULL,
-    machine_name VARCHAR(255) NOT NULL,
-    started_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    ended_at TIMESTAMP WITH TIME ZONE,
-    event_count INTEGER NOT NULL DEFAULT 0
+    user_name VARCHAR(255),
+    machine_name VARCHAR(255),
+    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    end_time TIMESTAMP WITH TIME ZONE,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_sessions_user ON sessions(user_name);
-CREATE INDEX idx_sessions_started ON sessions(started_at DESC);
+CREATE INDEX idx_sessions_user_start ON sessions(user_name, start_time);
 ```
 
-**API key management:**
+**Registered models:**
 ```sql
-CREATE TABLE api_keys (
-    id SERIAL PRIMARY KEY,
-    key_hash VARCHAR(255) NOT NULL UNIQUE,  -- Hashed API key
-    description VARCHAR(500),
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMP WITH TIME ZONE,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    rate_limit_per_minute INTEGER DEFAULT 600  -- 100 events/10s = 600/min
+CREATE TABLE registered_models (
+    model_id VARCHAR(255) PRIMARY KEY,       -- UUID stored in workbook custom properties
+    model_name VARCHAR(500) NOT NULL,         -- Locked after first registration
+    description TEXT,                         -- Editable on re-register
+    version INTEGER NOT NULL DEFAULT 1,       -- Incremented on re-register
+    registered_by VARCHAR(255) NOT NULL,      -- User who registered this version
+    machine_name VARCHAR(255),                -- Machine where registration occurred
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,  -- Whether this version is active
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_api_keys_hash ON api_keys(key_hash) WHERE is_active = TRUE;
+CREATE INDEX idx_models_name_version ON registered_models(model_name, version);
+CREATE INDEX idx_models_owner_created ON registered_models(registered_by, created_at);
 ```
 
 ---
@@ -760,38 +773,33 @@ CREATE INDEX idx_api_keys_hash ON api_keys(key_hash) WHERE is_active = TRUE;
 - On duplicate `eventId`, return 200 OK (don't error)
 - Track duplicates in response for observability
 
-**Example logic:**
+**Implementation (actual):**
+
+The backend uses `INSERT ... ON CONFLICT DO NOTHING` on the `event_id` primary key. This is a single bulk statement per batch — duplicates are silently skipped without raising exceptions.
+
 ```python
-def store_events(events):
-    stored = 0
-    duplicates = 0
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-    for event in events:
-        try:
-            db.insert(event)
-            stored += 1
-        except UniqueViolationError:  # eventId already exists
-            duplicates += 1
-            # Don't error - this is expected behavior
-
-    return {
-        "received": len(events),
-        "stored": stored,
-        "duplicates": duplicates
-    }
+stmt = sqlite_insert(AuditEvent).values(batch).on_conflict_do_nothing(
+    index_elements=["event_id"]
+)
+result = await session.execute(stmt)
+inserted = result.rowcount  # only counts genuinely new rows
 ```
 
-**Why it matters:**
-- Client retries on transient failures
+**Why idempotency matters:**
+- The add-in's local disk buffer retries events after crash/restart
 - Network issues can cause duplicate sends
-- Circuit breaker recovery may re-send batches
+- Circuit breaker recovery may re-send batches from buffer files
+- `event_id` (UUID) is generated client-side, so retried events carry the same ID
 
 ### 2. Batch Processing
 
 **Requirements:**
-- Accept batches of 1-100 events per request
-- Process batches transactionally (all-or-nothing preferred, but not required)
-- Return success if ANY events were stored (even if some duplicates)
+- Accept batches of 1-1000 events per request (wrapped in `{"events": [...]}`)
+- Process in sub-batches of 500 records for database efficiency
+- Use `INSERT ... ON CONFLICT DO NOTHING` for idempotent ingestion
+- Return HTTP 202 with `accepted` count (genuinely new rows inserted)
 
 **Performance target:**
 - Process 100-event batch in <1 second

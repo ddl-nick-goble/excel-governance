@@ -6,6 +6,7 @@ using DominoGovernanceTracker.Config;
 using DominoGovernanceTracker.Core;
 using DominoGovernanceTracker.Models;
 using DominoGovernanceTracker.Publishing;
+using DominoGovernanceTracker.Services;
 using DominoGovernanceTracker.UI;
 using ExcelDna.Integration;
 using Serilog;
@@ -27,6 +28,7 @@ namespace DominoGovernanceTracker
         private static DgtConfig _config;
         private static HealthMonitor _healthMonitor;
         private static SystemEventMonitor _systemEventMonitor;
+        private static ModelRegistrationService _modelService;
 
         public static AddIn Instance => _instance;
 
@@ -81,6 +83,9 @@ namespace DominoGovernanceTracker
 
                 // Dispose queue
                 _eventQueue?.Dispose();
+
+                // Dispose model registration service
+                _modelService?.Dispose();
 
                 // Dispose ribbon UI
                 DgtRibbon.Instance?.Dispose();
@@ -238,8 +243,12 @@ namespace DominoGovernanceTracker
                 _publisher.Start();
                 Log.Debug("HTTP publisher initialized and started");
 
+                // Initialize model registration service
+                _modelService = new ModelRegistrationService(_config);
+                Log.Debug("Model registration service initialized");
+
                 // Initialize event manager
-                _eventManager = new EventManager(_excelApp, _eventQueue, _config);
+                _eventManager = new EventManager(_excelApp, _eventQueue, _config, _modelService);
                 _eventManager.StartTracking();
                 Log.Information("Event tracking started");
 
@@ -284,6 +293,16 @@ namespace DominoGovernanceTracker
         public HttpEventPublisher Publisher => _publisher;
 
         /// <summary>
+        /// Gets the model registration service (for ribbon UI)
+        /// </summary>
+        public ModelRegistrationService ModelService => _modelService;
+
+        /// <summary>
+        /// Gets the event queue (for emitting events from UI)
+        /// </summary>
+        public EventQueue EventQueue => _eventQueue;
+
+        /// <summary>
         /// Gets whether tracking is currently active
         /// </summary>
         public bool IsTracking()
@@ -324,15 +343,16 @@ namespace DominoGovernanceTracker
             if (!IsTracking())
                 return TrackingHealthStatus.Inactive;
 
-            // Check publisher health
-            var stats = GetPublisherStats();
-
-            // If circuit breaker is open or we have buffered events, we're degraded
-            // (HasBufferedEvents means API is down or slow, events are accumulating)
-            if (stats.CircuitBreakerIsOpen || stats.HasBufferedEvents)
+            // Use live health monitor status — not buffered event count,
+            // since stale buffer entries from a past outage don't mean the API is down now
+            if (_healthMonitor != null && !_healthMonitor.IsHealthy)
                 return TrackingHealthStatus.Degraded;
 
-            // Otherwise, we're healthy
+            // Circuit breaker open means active send failures
+            var stats = GetPublisherStats();
+            if (stats.CircuitBreakerIsOpen)
+                return TrackingHealthStatus.Degraded;
+
             return TrackingHealthStatus.Healthy;
         }
     }

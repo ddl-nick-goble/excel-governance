@@ -29,7 +29,10 @@ namespace DominoGovernanceTracker.Models
         SessionEnd,
         AddInLoad,
         AddInUnload,
-        Error
+        Error,
+
+        // Model events
+        ModelRegistration
     }
 
     /// <summary>
@@ -152,6 +155,12 @@ namespace DominoGovernanceTracker.Models
         /// </summary>
         [JsonPropertyName("correlationId")]
         public string CorrelationId { get; set; }
+
+        /// <summary>
+        /// Registered model ID (set when workbook is registered)
+        /// </summary>
+        [JsonPropertyName("modelId")]
+        public string ModelId { get; set; }
 
         /// <summary>
         /// Creates a deep copy of this event

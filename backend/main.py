@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 import time
 import os
 
-from api import events, health, dashboard
+from api import events, health, dashboard, models
 from infrastructure.database import db_manager
 from infrastructure.logger import configure_logging, get_logger
 from services.background_service import BackgroundService
@@ -213,6 +213,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(events.router)
 app.include_router(health.router)
 app.include_router(dashboard.router)
+app.include_router(models.router)
 
 
 # ============================================================================

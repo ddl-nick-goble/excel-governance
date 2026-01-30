@@ -5,9 +5,12 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using DominoGovernanceTracker.Core;
+using DominoGovernanceTracker.Models;
+using DominoGovernanceTracker.Services;
 using ExcelDna.Integration;
 using ExcelDna.Integration.CustomUI;
 using Serilog;
+using MSExcel = Microsoft.Office.Interop.Excel;
 using CompositingQuality = System.Drawing.Drawing2D.CompositingQuality;
 using GraphicsPath = System.Drawing.Drawing2D.GraphicsPath;
 using PathGradientBrush = System.Drawing.Drawing2D.PathGradientBrush;
@@ -62,6 +65,18 @@ namespace DominoGovernanceTracker.UI
                               size='normal'
                               onAction='OnRefreshClick'
                               screentip='Refresh tracking status'/>
+                    </group>
+                    <group id='dgtModelGroup' label='Model Registration'>
+                      <button id='btnRegisterModel'
+                              label='Register'
+                              imageMso='ModuleInsert'
+                              size='normal'
+                              onAction='OnRegisterModelClick'
+                              screentip='Register this workbook as a Domino model'
+                              supertip='Opens a dialog to register or re-register this workbook. Events are only tracked for registered workbooks.'/>
+                      <labelControl id='lblModelStatus'
+                                   getLabel='GetModelStatusLabel'
+                                   screentip='Model registration status for active workbook'/>
                     </group>
                     <group id='dgtBufferGroup' label='Event Buffer'>
                       <labelControl id='lblBufferCount'
@@ -244,6 +259,176 @@ namespace DominoGovernanceTracker.UI
             catch (Exception ex)
             {
                 Log.Error(ex, "Error refreshing ribbon");
+            }
+        }
+
+        // === MODEL REGISTRATION CALLBACKS ===
+
+        public void OnRegisterModelClick(IRibbonControl control)
+        {
+            try
+            {
+                var app = (MSExcel.Application)ExcelDnaUtil.Application;
+                var wb = app.ActiveWorkbook;
+
+                if (wb == null)
+                {
+                    System.Windows.Forms.MessageBox.Show(
+                        "No active workbook to register.",
+                        "DGT - Register Model",
+                        System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var modelService = AddIn.Instance?.ModelService;
+                if (modelService == null)
+                {
+                    System.Windows.Forms.MessageBox.Show(
+                        "Model registration service not available.",
+                        "DGT - Register Model",
+                        System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Check if already registered (for re-register flow)
+                var existingModelId = modelService.GetWorkbookModelId(wb);
+                var existingModelName = modelService.GetWorkbookModelName(wb);
+                var existingVersion = modelService.GetWorkbookVersion(wb);
+
+                string existingDescription = null;
+                // If re-registering, try to fetch current description from API
+                if (!string.IsNullOrEmpty(existingModelId))
+                {
+                    try
+                    {
+                        var existing = Task.Run(() => modelService.CheckRegistrationAsync(existingModelId)).Result;
+                        existingDescription = existing?.Description;
+                    }
+                    catch
+                    {
+                        // API might be down; proceed with what we have
+                    }
+                }
+
+                var form = new ModelRegistrationForm(existingModelName, existingVersion, existingDescription);
+                var result = form.ShowDialog();
+
+                if (result != System.Windows.Forms.DialogResult.OK)
+                    return;
+
+                // Build registration request
+                var request = new ModelRegistrationRequest
+                {
+                    ModelName = form.ModelName,
+                    Description = form.Description,
+                    RegisteredBy = Environment.UserName,
+                    MachineName = Environment.MachineName,
+                    ExistingModelId = existingModelId
+                };
+
+                // Call API asynchronously but wait for result (we're in a UI callback)
+                RegisteredModel registered = null;
+                try
+                {
+                    registered = Task.Run(() => modelService.RegisterAsync(request)).Result;
+                }
+                catch (Exception ex)
+                {
+                    var innerMsg = ex.InnerException?.Message ?? ex.Message;
+                    System.Windows.Forms.MessageBox.Show(
+                        $"Registration failed:\n\n{innerMsg}",
+                        "DGT - Registration Error",
+                        System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Error);
+                    return;
+                }
+
+                // Save properties to workbook
+                modelService.SetWorkbookProperties(wb, registered.ModelId, registered.ModelName, registered.Version);
+
+                // Update cache
+                var workbookName = wb.Name;
+                modelService.UpdateCache(workbookName, registered.ModelId);
+
+                // Emit a ModelRegistration audit event
+                try
+                {
+                    var registrationEvent = new AuditEvent
+                    {
+                        EventType = AuditEventType.ModelRegistration,
+                        UserName = Environment.UserName,
+                        MachineName = Environment.MachineName,
+                        UserDomain = Environment.UserDomainName,
+                        WorkbookName = wb.Name,
+                        WorkbookPath = wb.FullName,
+                        ModelId = registered.ModelId,
+                        Details = $"Model '{registered.ModelName}' registered as version {registered.Version}",
+                    };
+                    AddIn.Instance?.EventQueue?.Enqueue(registrationEvent);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to emit ModelRegistration event");
+                }
+
+                // Invalidate ribbon to show updated status
+                _ribbon?.Invalidate();
+
+                System.Windows.Forms.MessageBox.Show(
+                    $"Workbook registered successfully!\n\n" +
+                    $"Model: {registered.ModelName}\n" +
+                    $"Version: {registered.Version}\n" +
+                    $"Model ID: {registered.ModelId}\n\n" +
+                    "Events will now be tracked for this workbook. " +
+                    "Save the workbook to persist the registration.",
+                    "DGT - Registration Complete",
+                    System.Windows.Forms.MessageBoxButtons.OK,
+                    System.Windows.Forms.MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error in register model click handler");
+                System.Windows.Forms.MessageBox.Show(
+                    $"Error: {ex.Message}",
+                    "DGT - Register Model Error",
+                    System.Windows.Forms.MessageBoxButtons.OK,
+                    System.Windows.Forms.MessageBoxIcon.Error);
+            }
+        }
+
+        public string GetModelStatusLabel(IRibbonControl control)
+        {
+            try
+            {
+                var addIn = AddIn.Instance;
+                if (addIn?.ModelService == null)
+                    return "Model: -";
+
+                var app = (MSExcel.Application)ExcelDnaUtil.Application;
+                var wb = app.ActiveWorkbook;
+                if (wb == null)
+                    return "Model: No workbook";
+
+                var workbookName = wb.Name;
+                var modelService = addIn.ModelService;
+
+                if (modelService.IsWorkbookRegistered(workbookName))
+                {
+                    var modelName = modelService.GetWorkbookModelName(wb);
+                    var version = modelService.GetWorkbookVersion(wb);
+                    var display = !string.IsNullOrEmpty(modelName)
+                        ? $"{modelName} v{version}"
+                        : "Registered";
+                    return $"Model: {display}";
+                }
+
+                return "Model: Not Registered";
+            }
+            catch
+            {
+                return "Model: Error";
             }
         }
 

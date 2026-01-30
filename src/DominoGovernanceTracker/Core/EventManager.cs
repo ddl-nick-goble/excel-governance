@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 using DominoGovernanceTracker.Models;
+using DominoGovernanceTracker.Services;
 using Serilog;
 using MSExcel = Microsoft.Office.Interop.Excel;
 
@@ -17,8 +18,10 @@ namespace DominoGovernanceTracker.Core
         private readonly MSExcel.Application _app;
         private readonly EventQueue _queue;
         private readonly DgtConfig _config;
+        private readonly ModelRegistrationService _modelService;
         private readonly string _sessionId;
         private int _isTracking; // 0 = false, 1 = true (thread-safe with Interlocked - read from Ribbon UI thread)
+        private int _isReconnecting; // 0 = false, 1 = true (prevents concurrent reconnect attempts)
 
         // LRU cache to track old values before changes (bounded to prevent memory leak)
         private readonly LruCache<string, object> _cellValueCache = new LruCache<string, object>(10000);
@@ -31,11 +34,12 @@ namespace DominoGovernanceTracker.Core
         // Bulk operation threshold - operations affecting more cells are aggregated
         private const int BULK_OPERATION_THRESHOLD = 100;
 
-        public EventManager(MSExcel.Application app, EventQueue queue, DgtConfig config)
+        public EventManager(MSExcel.Application app, EventQueue queue, DgtConfig config, ModelRegistrationService modelService)
         {
             _app = app ?? throw new ArgumentNullException(nameof(app));
             _queue = queue ?? throw new ArgumentNullException(nameof(queue));
             _config = config ?? throw new ArgumentNullException(nameof(config));
+            _modelService = modelService ?? throw new ArgumentNullException(nameof(modelService));
             _sessionId = Guid.NewGuid().ToString("N");
         }
 
@@ -145,6 +149,9 @@ namespace DominoGovernanceTracker.Core
             var workbookName = GetSafeWorkbookName(wb);
             ResetWorkbookEventCount(workbookName);
 
+            // Cache registration status from workbook custom document properties
+            _modelService.CacheWorkbookRegistration(wb, workbookName);
+
             EnqueueEvent(new AuditEvent
             {
                 EventType = AuditEventType.WorkbookOpen,
@@ -160,7 +167,8 @@ namespace DominoGovernanceTracker.Core
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Failed to pre-populate cache for workbook");
+                if (!HandleIfDisconnected(ex))
+                    Log.Warning(ex, "Failed to pre-populate cache for workbook");
             }
         }
 
@@ -178,6 +186,7 @@ namespace DominoGovernanceTracker.Core
 
             // Clean up tracking data for this workbook
             _workbookEventCounts.TryRemove(workbookName, out _);
+            _modelService.RemoveFromCache(workbookName);
 
             // Clean up cache entries for this workbook to free memory
             _cellValueCache.RemoveWhere(key => key.StartsWith(workbookName + "!"));
@@ -198,6 +207,9 @@ namespace DominoGovernanceTracker.Core
         {
             var workbookName = GetSafeWorkbookName(wb);
             _currentWorkbookName = workbookName;
+
+            // Cache registration status on activate (handles workbook switching)
+            _modelService.CacheWorkbookRegistration(wb, workbookName);
 
             // Restore event count for this workbook
             if (_workbookEventCounts.TryGetValue(workbookName, out var count))
@@ -332,7 +344,8 @@ namespace DominoGovernanceTracker.Core
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Error capturing cell change event");
+                if (!HandleIfDisconnected(ex))
+                    Log.Warning(ex, "Error capturing cell change event");
             }
             finally
             {
@@ -364,7 +377,8 @@ namespace DominoGovernanceTracker.Core
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Error capturing sheet add event");
+                if (!HandleIfDisconnected(ex))
+                    Log.Warning(ex, "Error capturing sheet add event");
             }
         }
 
@@ -388,7 +402,8 @@ namespace DominoGovernanceTracker.Core
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Error capturing sheet activate event");
+                if (!HandleIfDisconnected(ex))
+                    Log.Warning(ex, "Error capturing sheet activate event");
             }
         }
 
@@ -419,8 +434,84 @@ namespace DominoGovernanceTracker.Core
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Error capturing selection change event");
+                if (!HandleIfDisconnected(ex))
+                    Log.Warning(ex, "Error capturing selection change event");
             }
+        }
+
+        // === COM RECONNECTION ===
+
+        private const int RPC_E_DISCONNECTED = unchecked((int)0x80010108);
+
+        /// <summary>
+        /// Detaches all event handlers and re-attaches them.
+        /// Called when COM objects disconnect (e.g. AutoSave in Excel 365).
+        /// </summary>
+        private void ReconnectEventHandlers()
+        {
+            if (Interlocked.CompareExchange(ref _isReconnecting, 1, 0) != 0)
+                return; // Another thread is already reconnecting
+
+            try
+            {
+                Log.Warning("=== COM RECONNECT: Re-subscribing Excel event handlers ===");
+
+                // Detach all handlers (swallow errors — some may already be dead)
+                try { _app.WorkbookOpen -= OnWorkbookOpen; } catch { }
+                try { _app.WorkbookBeforeClose -= OnWorkbookBeforeClose; } catch { }
+                try { _app.WorkbookAfterSave -= OnWorkbookAfterSave; } catch { }
+                try { _app.WorkbookActivate -= OnWorkbookActivate; } catch { }
+                try { _app.WorkbookDeactivate -= OnWorkbookDeactivate; } catch { }
+                try { ((MSExcel.AppEvents_Event)_app).NewWorkbook -= OnNewWorkbook; } catch { }
+                try { _app.WorkbookNewSheet -= OnWorkbookNewSheet; } catch { }
+                try { _app.SheetChange -= OnSheetChange; } catch { }
+                try { _app.SheetBeforeDoubleClick -= OnSheetBeforeDoubleClick; } catch { }
+                try { _app.SheetActivate -= OnSheetActivate; } catch { }
+                try { _app.SheetSelectionChange -= OnSheetSelectionChange; } catch { }
+
+                // Re-attach all handlers
+                _app.WorkbookOpen += OnWorkbookOpen;
+                _app.WorkbookBeforeClose += OnWorkbookBeforeClose;
+                _app.WorkbookAfterSave += OnWorkbookAfterSave;
+                _app.WorkbookActivate += OnWorkbookActivate;
+                _app.WorkbookDeactivate += OnWorkbookDeactivate;
+                ((MSExcel.AppEvents_Event)_app).NewWorkbook += OnNewWorkbook;
+                _app.WorkbookNewSheet += OnWorkbookNewSheet;
+                _app.SheetChange += OnSheetChange;
+                _app.SheetBeforeDoubleClick += OnSheetBeforeDoubleClick;
+                _app.SheetActivate += OnSheetActivate;
+
+                if (_config.TrackSelectionChanges)
+                {
+                    _app.SheetSelectionChange += OnSheetSelectionChange;
+                }
+
+                Log.Information("=== COM RECONNECT: Event handlers re-subscribed successfully ===");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "COM RECONNECT: Failed to re-subscribe event handlers");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _isReconnecting, 0);
+            }
+        }
+
+        /// <summary>
+        /// Returns true if the exception is a COM disconnection error,
+        /// and if so, triggers reconnection.
+        /// </summary>
+        private bool HandleIfDisconnected(Exception ex)
+        {
+            if (ex is COMException comEx && comEx.ErrorCode == RPC_E_DISCONNECTED)
+            {
+                Log.Warning("COM object disconnected — scheduling reconnect");
+                // Reconnect on a separate thread to avoid re-entrancy issues
+                ThreadPool.QueueUserWorkItem(_ => ReconnectEventHandlers());
+                return true;
+            }
+            return false;
         }
 
         // === HELPER METHODS ===
@@ -433,6 +524,24 @@ namespace DominoGovernanceTracker.Core
             evt.MachineName = evt.MachineName ?? Environment.MachineName;
             evt.UserDomain = evt.UserDomain ?? Environment.UserDomainName;
             evt.Timestamp = DateTime.UtcNow;
+
+            // Gate on registration: only enqueue events for registered workbooks
+            var workbookName = evt.WorkbookName;
+            if (!string.IsNullOrEmpty(workbookName))
+            {
+                var modelId = _modelService.GetCachedModelId(workbookName);
+                if (string.IsNullOrEmpty(modelId))
+                {
+                    // Workbook is not registered — drop the event entirely
+                    return;
+                }
+                evt.ModelId = modelId;
+            }
+            else
+            {
+                // System-level events (SessionStart/End, AddInLoad/Unload) have no workbook
+                // Allow them through without a model ID
+            }
 
             _queue.Enqueue(evt);
         }

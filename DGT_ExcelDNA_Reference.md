@@ -34,58 +34,56 @@ ExcelDNA is a free, open-source .NET library that allows creating high-performan
 
 ---
 
-## 2. Recommended Project Structure
+## 2. Project Structure (Actual)
 
 ```
-DominoGovernanceTracker/
+excel-governance/
 ├── src/
-│   ├── DominoGovernanceTracker/           # Main Add-in Project
-│   │   ├── AddIn.cs                       # IExcelAddIn implementation (entry point)
-│   │   ├── DominoGovernanceTracker.csproj
-│   │   ├── DominoGovernanceTracker.dna    # Optional if using SDK-style
-│   │   │
-│   │   ├── Core/                          # Core tracking logic
-│   │   │   ├── EventManager.cs            # Excel event subscription manager
-│   │   │   ├── CellChangeTracker.cs       # SheetChange event handler
-│   │   │   ├── WorkbookTracker.cs         # Open/Close/Save event handler
-│   │   │   └── SessionManager.cs          # Excel session lifecycle
-│   │   │
-│   │   ├── Audit/                         # Audit trail components
-│   │   │   ├── AuditEvent.cs              # Event data model
-│   │   │   ├── AuditLogger.cs             # Logging abstraction
-│   │   │   ├── AuditExporter.cs           # Export functionality
-│   │   │   └── ComplianceValidator.cs     # Validation rules
-│   │   │
-│   │   ├── Storage/                       # Persistence layer
-│   │   │   ├── IAuditStore.cs             # Storage interface
-│   │   │   ├── SqliteAuditStore.cs        # SQLite implementation
-│   │   │   └── JsonFileStore.cs           # JSON fallback
-│   │   │
-│   │   ├── UI/                            # Optional UI components
-│   │   │   ├── DgtRibbon.cs               # Ribbon extension
-│   │   │   ├── DgtRibbon.xml              # Ribbon XML definition
-│   │   │   ├── AuditViewerPane.cs         # Custom Task Pane
-│   │   │   └── Controls/                  # WinForms UserControls
-│   │   │
-│   │   ├── Functions/                     # Excel UDFs (optional)
-│   │   │   └── DgtFunctions.cs            # =DGT.Status(), etc.
-│   │   │
-│   │   └── Config/                        # Configuration
-│   │       ├── DgtConfig.cs               # Settings model
-│   │       └── ConfigManager.cs           # Load/save settings
-│   │
-│   └── DominoGovernanceTracker.Tests/     # Unit tests
-│       └── ...
+│   └── DominoGovernanceTracker/           # Main Add-in Project
+│       ├── AddIn.cs                       # IExcelAddIn implementation (entry point)
+│       ├── DominoGovernanceTracker.csproj
+│       │
+│       ├── Core/                          # Core tracking logic
+│       │   ├── EventManager.cs            # Excel COM event subscription + enrichment
+│       │   ├── EventQueue.cs              # Thread-safe bounded in-memory queue
+│       │   └── WatchdogTimer.cs           # Self-healing timer for ribbon updates
+│       │
+│       ├── Models/                        # Data models
+│       │   ├── AuditEvent.cs              # Event model + AuditEventType enum
+│       │   ├── AuditEventBatch.cs         # Batch wrapper for HTTP transport
+│       │   ├── DgtConfig.cs               # Configuration model
+│       │   └── RegisteredModel.cs         # Model registration request/response
+│       │
+│       ├── Publishing/                    # Event publishing pipeline
+│       │   ├── HttpEventPublisher.cs      # Background publisher with Polly retry + circuit breaker
+│       │   └── LocalBuffer.cs             # Disk-based buffer for failed sends
+│       │
+│       ├── Services/                      # Business services
+│       │   └── ModelRegistrationService.cs # Model registration + workbook property management
+│       │
+│       └── UI/                            # UI components
+│           ├── DgtRibbon.cs               # Ribbon UI (status, register, buffer controls)
+│           └── ModelRegistrationForm.cs   # WinForms dialog for model registration
 │
-├── docs/
-│   └── compliance-requirements.md
+├── backend/                               # Python FastAPI backend
+│   ├── main.py                            # FastAPI app entry point
+│   ├── api/
+│   │   ├── events.py                      # POST /api/events, query, statistics
+│   │   ├── models.py                      # Model registration endpoints
+│   │   └── health.py                      # Health check endpoint
+│   ├── models/
+│   │   ├── database.py                    # SQLAlchemy ORM models
+│   │   └── schemas.py                     # Pydantic request/response schemas
+│   ├── repositories/
+│   │   ├── event_repository.py            # Event CRUD with bulk insert
+│   │   └── model_repository.py            # Model registration CRUD
+│   └── services/
+│       ├── event_service.py               # Event ingestion logic
+│       └── model_service.py               # Model registration logic
 │
-├── tools/
-│   └── installer/                         # WiX installer (optional)
-│
-├── README.md
-├── LICENSE
-└── DominoGovernanceTracker.sln
+├── DGT_Backend_API_SPECIFICATION.md
+├── DGT_ExcelDNA_Reference.md
+└── rebuild-addin.ps1                      # Build script for the add-in
 ```
 
 ---
@@ -433,67 +431,105 @@ namespace DominoGovernanceTracker.Core
 
 ```csharp
 using System;
+using System.Text.Json.Serialization;
 
-namespace DominoGovernanceTracker.Audit
+namespace DominoGovernanceTracker.Models
 {
     public enum AuditEventType
     {
-        // Workbook events
+        // Workbook events (0-5)
         WorkbookNew,
         WorkbookOpen,
         WorkbookClose,
         WorkbookSave,
         WorkbookActivate,
         WorkbookDeactivate,
-        
-        // Cell/Sheet events
+
+        // Cell/Sheet events (6-11)
         CellChange,
         SelectionChange,
         SheetAdd,
         SheetDelete,
         SheetRename,
-        
-        // System events
+        SheetActivate,
+
+        // System events (12-16)
         SessionStart,
         SessionEnd,
         AddInLoad,
         AddInUnload,
-        Error
+        Error,
+
+        // Model events (17)
+        ModelRegistration
     }
 
     public class AuditEvent
     {
+        [JsonPropertyName("eventId")]
         public Guid EventId { get; set; } = Guid.NewGuid();
+
+        [JsonPropertyName("timestamp")]
         public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+
+        [JsonPropertyName("eventType")]
         public AuditEventType EventType { get; set; }
-        
+
         // Context
+        [JsonPropertyName("userName")]
         public string UserName { get; set; }
+        [JsonPropertyName("machineName")]
         public string MachineName { get; set; }
+        [JsonPropertyName("userDomain")]
         public string UserDomain { get; set; }
-        
+        [JsonPropertyName("sessionId")]
+        public string SessionId { get; set; }
+
         // Workbook context
+        [JsonPropertyName("workbookName")]
         public string WorkbookName { get; set; }
+        [JsonPropertyName("workbookPath")]
         public string WorkbookPath { get; set; }
+        [JsonPropertyName("sheetName")]
         public string SheetName { get; set; }
-        
-        // Cell context (for cell changes)
+
+        // Cell context
+        [JsonPropertyName("cellAddress")]
         public string CellAddress { get; set; }
+        [JsonPropertyName("cellCount")]
         public int CellCount { get; set; }
+        [JsonPropertyName("oldValue")]
         public string OldValue { get; set; }
+        [JsonPropertyName("newValue")]
         public string NewValue { get; set; }
+        [JsonPropertyName("formula")]
         public string Formula { get; set; }
-        
-        // Additional details
+
+        // Additional
+        [JsonPropertyName("details")]
         public string Details { get; set; }
+        [JsonPropertyName("errorMessage")]
         public string ErrorMessage { get; set; }
-        
-        // Compliance fields
-        public string CorrelationId { get; set; }  // Link related events
-        public string SessionId { get; set; }      // Excel session identifier
+        [JsonPropertyName("correlationId")]
+        public string CorrelationId { get; set; }
+        [JsonPropertyName("modelId")]
+        public string ModelId { get; set; }         // Registered model ID
     }
 }
 ```
+
+### Event Publishing Pipeline
+
+Events flow through a multi-stage pipeline:
+
+1. **EventManager** captures Excel COM events, enriches with user/session context, gates on workbook registration, and enqueues to the EventQueue
+2. **EventQueue** is a thread-safe bounded in-memory queue (default 1000 events). Overflow is handled by the LocalBuffer
+3. **HttpEventPublisher** runs on a background thread with a periodic flush timer. It dequeues batches and sends to the API using Polly retry (exponential backoff) and circuit breaker (50% failure rate over 30s). Failed sends go to the LocalBuffer
+4. **LocalBuffer** persists failed batches to disk as JSON files. On startup, buffered events are re-sent. Duplicate `event_id`s are handled server-side via `INSERT ... ON CONFLICT DO NOTHING`
+
+### Model Registration
+
+Workbooks must be registered before events are tracked. Registration stores a `model_id` (UUID) in the workbook's custom document properties. The EventManager checks for this property and only enqueues events for registered workbooks. A `ModelRegistration` event is emitted when registration succeeds.
 
 ---
 

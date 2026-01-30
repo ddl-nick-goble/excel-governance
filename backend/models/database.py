@@ -7,6 +7,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     Index,
     Integer,
     String,
@@ -51,6 +52,9 @@ class AuditEventType(int, enum.Enum):
     ADDIN_LOAD = 14
     ADDIN_UNLOAD = 15
     ERROR = 16
+
+    # Model events
+    MODEL_REGISTRATION = 17
 
 
 class AuditEvent(Base):
@@ -161,6 +165,13 @@ class AuditEvent(Base):
         comment="Correlation ID to link related events"
     )
 
+    # Model registration
+    model_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        index=True,
+        comment="Registered model ID (from registered_models table)"
+    )
+
     # Composite indexes for common query patterns
     __table_args__ = (
         # Time-based queries (most common)
@@ -176,6 +187,9 @@ class AuditEvent(Base):
 
         # Correlation tracking
         Index("ix_events_correlation", "correlation_id", "timestamp"),
+
+        # Model tracking
+        Index("ix_events_model_timestamp", "model_id", "timestamp"),
     )
 
     def __repr__(self) -> str:
@@ -239,3 +253,67 @@ class Session(Base):
 
     def __repr__(self) -> str:
         return f"Session(session_id={self.session_id}, user={self.user_name}, start={self.start_time})"
+
+
+class RegisteredModel(Base):
+    """
+    Registered Excel workbook models for governance tracking.
+    Each version of a model gets its own row with a unique model_id.
+    model_name ties versions together; model_id is the unique PK stored in the workbook.
+    """
+    __tablename__ = "registered_models"
+
+    model_id: Mapped[str] = mapped_column(
+        String(255),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+        comment="Unique model identifier (stored in workbook custom properties)"
+    )
+    model_name: Mapped[str] = mapped_column(
+        String(500),
+        nullable=False,
+        index=True,
+        comment="Model name (locked after first registration)"
+    )
+    description: Mapped[Optional[str]] = mapped_column(
+        Text,
+        comment="Model description (editable on re-register)"
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        comment="Version number (incremented on re-register/fork)"
+    )
+    registered_by: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="User who registered this version"
+    )
+    machine_name: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        comment="Machine where registration occurred"
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        comment="Whether this model version is active"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When this version was registered"
+    )
+
+    __table_args__ = (
+        Index("ix_models_name_version", "model_name", "version"),
+        Index("ix_models_owner_created", "registered_by", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"RegisteredModel(model_id={self.model_id}, "
+            f"name={self.model_name}, "
+            f"version={self.version})"
+        )
