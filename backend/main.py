@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import time
 import os
+from sqlalchemy import text
 
 from api import events, health, dashboard, models
 from infrastructure.database import db_manager
@@ -58,7 +59,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             from models.database import Base
             async with db_manager.engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+                # Lightweight SQLite schema patching for new optional columns
+                try:
+                    result = await conn.execute(text("PRAGMA table_info(audit_events)"))
+                    columns = {row[1] for row in result.fetchall()}
+                    if "display_value" not in columns:
+                        await conn.execute(text("ALTER TABLE audit_events ADD COLUMN display_value TEXT"))
+                        logger.info("database_column_added", table="audit_events", column="display_value")
+                except Exception as ex:
+                    logger.warning("database_column_check_failed", table="audit_events", error=str(ex))
             logger.info("database_tables_created")
+        else:
+            # Postgres: best-effort additive column for new optional fields
+            async with db_manager.engine.begin() as conn:
+                try:
+                    await conn.execute(text("ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS display_value TEXT"))
+                except Exception as ex:
+                    logger.warning("database_column_check_failed", table="audit_events", error=str(ex))
 
         # Start background tasks
         global background_service

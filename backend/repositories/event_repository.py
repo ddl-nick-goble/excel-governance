@@ -67,6 +67,7 @@ class EventRepository:
                     "old_value": event.old_value,
                     "new_value": event.new_value,
                     "formula": event.formula,
+                    "display_value": event.display_value,
                     "details": event.details,
                     "error_message": event.error_message,
                     "correlation_id": event.correlation_id,

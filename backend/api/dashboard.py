@@ -167,8 +167,15 @@ def _serialize_event(event: AuditEvent, model_info_map: dict[str, dict]) -> dict
         "old_value": truncate_value(event.old_value, 100),
         "new_value": truncate_value(event.new_value, 100),
         "formula": truncate_value(event.formula, 100),
+        "display_value": truncate_value(event.display_value, 100),
+        "old_value_full": event.old_value,
+        "new_value_full": event.new_value,
+        "formula_full": event.formula,
+        "display_value_full": event.display_value,
+        "workbook_path": event.workbook_path,
         "details": event.details,
         "error_message": event.error_message,
+        "correlation_id": event.correlation_id,
     }
 
 

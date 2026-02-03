@@ -205,9 +205,132 @@
             white-space: nowrap;
         }
 
+        .value-change.format-change {
+            background: #ffe6f2;
+            border-color: #ffb3d9;
+        }
+
         .change-arrow {
             color: #999;
             margin: 0 4px;
+        }
+
+        .events-table tbody tr.event-row {
+            cursor: pointer;
+        }
+
+        .events-table tbody tr.detail-row td {
+            padding: 0;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .detail-panel {
+            background: #f9fafb;
+            border-top: 1px solid #e5e7eb;
+            padding: 16px 20px;
+            font-size: 0.75rem;
+        }
+
+        .detail-sections {
+            display: flex;
+            gap: 24px;
+        }
+
+        .detail-section {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .detail-section-title {
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #9ca3af;
+            font-weight: 700;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .detail-field {
+            display: flex;
+            padding: 3px 0;
+        }
+
+        .detail-label {
+            color: #6b7280;
+            font-weight: 600;
+            min-width: 90px;
+            flex-shrink: 0;
+            font-size: 0.7rem;
+        }
+
+        .detail-value {
+            color: #111827;
+            word-break: break-all;
+            font-family: 'Courier New', monospace;
+            font-size: 0.72rem;
+        }
+
+        .detail-value.muted {
+            color: #9ca3af;
+            font-style: italic;
+            font-family: inherit;
+        }
+
+        .detail-change-box {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        .detail-change-chip {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.72rem;
+            max-width: 280px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .detail-change-chip.old {
+            background: #fef2f2;
+            border-color: #fecaca;
+            color: #991b1b;
+        }
+
+        .detail-change-chip.new {
+            background: #f0fdf4;
+            border-color: #bbf7d0;
+            color: #166534;
+        }
+
+        .detail-change-chip.format-old {
+            background: #fdf4ff;
+            border-color: #f0abfc;
+            color: #86198f;
+        }
+
+        .detail-change-chip.format-new {
+            background: #fdf4ff;
+            border-color: #f0abfc;
+            color: #86198f;
+        }
+
+        .detail-change-arrow {
+            color: #9ca3af;
+            font-size: 0.8rem;
+        }
+
+        .detail-full-section {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #e5e7eb;
         }
 
         .loading-spinner {
@@ -481,6 +604,8 @@
             if (data.type === 'initial') {
                 updateMetrics(data.metrics);
                 allEvents = (data.events || []).map(enrichEvent);
+                eventIndex.clear();
+                allEvents.forEach(e => eventIndex.set(e.event_id, e));
                 knownEventIds = new Set(allEvents.map(e => e.event_id));
                 initFilters();
                 renderTable();
@@ -490,7 +615,7 @@
                     .filter(e => !knownEventIds.has(e.event_id))
                     .map(enrichEvent);
                 if (newEvents.length > 0) {
-                    newEvents.forEach(e => knownEventIds.add(e.event_id));
+                    newEvents.forEach(e => { knownEventIds.add(e.event_id); eventIndex.set(e.event_id, e); });
                     allEvents = [...newEvents, ...allEvents].slice(0, 500);
                     updateFilterOptions();
                     renderTable();
@@ -514,7 +639,17 @@
             event.location_display = loc;
 
             // Change display for sorting (text-only version)
-            if (event.old_value !== null || event.new_value !== null) {
+            if (isFormatChange(event)) {
+                const oldFmt = extractNumberFormat(event.old_value_full || event.old_value);
+                const newFmt = extractNumberFormat(event.new_value_full || event.new_value);
+                event.change_display = `${oldFmt || '(empty)'} → ${newFmt || '(empty)'}`;
+            } else if (isValueLikeChange(event)) {
+                const oldVal = event.old_value || '(empty)';
+                const newVal = event.display_value_full || event.display_value || event.new_value || '(empty)';
+                event.change_display = oldVal === newVal ? `${newVal}` : `${oldVal} → ${newVal}`;
+            } else if (isFormulaChange(event) && event.formula) {
+                event.change_display = event.formula;
+            } else if (event.old_value !== null || event.new_value !== null) {
                 event.change_display = `${event.old_value || '(empty)'} → ${event.new_value || '(empty)'}`;
             } else if (event.formula) {
                 event.change_display = event.formula;
@@ -745,6 +880,9 @@
             eventsList.querySelectorAll('th[data-sort]').forEach(th => {
                 th.addEventListener('click', () => handleSort(th.dataset.sort));
             });
+
+            // Attach row click handlers for detail expansion
+            attachRowClickHandlers();
         }
 
         function createEventRow(event) {
@@ -757,7 +895,21 @@
 
             // Change info (HTML version)
             let changeInfo = '-';
-            if (event.old_value !== null || event.new_value !== null) {
+            if (isFormatChange(event)) {
+                const oldFmt = extractNumberFormat(event.old_value_full || event.old_value) || '(empty)';
+                const newFmt = extractNumberFormat(event.new_value_full || event.new_value) || '(empty)';
+                changeInfo = `<span class="value-change format-change">${escapeHtml(oldFmt)}</span><span class="change-arrow">→</span><span class="value-change format-change">${escapeHtml(newFmt)}</span>`;
+            } else if (isValueLikeChange(event)) {
+                const oldVal = event.old_value || '(empty)';
+                const newVal = event.display_value_full || event.display_value || event.new_value || '(empty)';
+                if (oldVal === newVal) {
+                    changeInfo = `<span class="value-change">${escapeHtml(newVal)}</span>`;
+                } else {
+                    changeInfo = `<span class="value-change">${escapeHtml(oldVal)}</span><span class="change-arrow">→</span><span class="value-change">${escapeHtml(newVal)}</span>`;
+                }
+            } else if (isFormulaChange(event) && event.formula) {
+                changeInfo = `<span class="value-change">${escapeHtml(event.formula)}</span>`;
+            } else if (event.old_value !== null || event.new_value !== null) {
                 const oldVal = event.old_value || '(empty)';
                 const newVal = event.new_value || '(empty)';
                 changeInfo = `<span class="value-change">${escapeHtml(oldVal)}</span><span class="change-arrow">→</span><span class="value-change">${escapeHtml(newVal)}</span>`;
@@ -768,7 +920,7 @@
             }
 
             return `
-                <tr>
+                <tr class="event-row" data-event-id="${escapeHtml(event.event_id)}">
                     <td class="event-type-cell">${escapeHtml(event.event_type_display)}</td>
                     <td class="event-workbook-cell">${modelName}</td>
                     <td class="event-workbook-cell">${modelVersion}</td>
@@ -779,6 +931,133 @@
                     <td class="event-time-cell" data-timestamp="${event.timestamp}">${timeStr}</td>
                 </tr>
             `;
+        }
+
+        function isFormatChange(event) {
+            return event.event_type === 'FORMAT_CHANGE' || event.event_type_display === 'Format Change';
+        }
+
+        function isFormulaChange(event) {
+            return event.event_type === 'FORMULA_CHANGE' || event.event_type_display === 'Formula Change';
+        }
+
+        function isValueLikeChange(event) {
+            return event.event_type === 'VALUE_INPUT'
+                || event.event_type_display === 'Value Input'
+                || event.event_type === 'CALCULATED_CELL_CHANGE'
+                || event.event_type_display === 'Calculated Cell Change'
+                || event.event_type === 'CELL_CHANGE'
+                || event.event_type_display === 'Cell Change';
+        }
+
+        function extractNumberFormat(fingerprint) {
+            if (!fingerprint) return '';
+            const parts = String(fingerprint).split('|');
+            return parts.length ? parts[parts.length - 1] : '';
+        }
+
+        function createDetailRow(event) {
+            const f = (label, value) => {
+                if (value === null || value === undefined || value === '') return '';
+                return `<div class="detail-field"><span class="detail-label">${label}</span><span class="detail-value">${escapeHtml(String(value))}</span></div>`;
+            };
+
+            // Build change section
+            let changeHtml = '';
+            if (isFormatChange(event)) {
+                const oldFmt = extractNumberFormat(event.old_value_full || event.old_value) || '(empty)';
+                const newFmt = extractNumberFormat(event.new_value_full || event.new_value) || '(empty)';
+                changeHtml = `
+                    <div class="detail-field"><span class="detail-label">Format</span>
+                        <div class="detail-change-box">
+                            <span class="detail-change-chip format-old">${escapeHtml(oldFmt)}</span>
+                            <span class="detail-change-arrow">→</span>
+                            <span class="detail-change-chip format-new">${escapeHtml(newFmt)}</span>
+                        </div>
+                    </div>`;
+            } else {
+                const oldVal = event.old_value_full || event.old_value;
+                const newVal = event.display_value_full || event.display_value || event.new_value_full || event.new_value;
+                if (oldVal || newVal) {
+                    changeHtml = `
+                        <div class="detail-field"><span class="detail-label">Value</span>
+                            <div class="detail-change-box">
+                                <span class="detail-change-chip old">${escapeHtml(oldVal || '(empty)')}</span>
+                                <span class="detail-change-arrow">→</span>
+                                <span class="detail-change-chip new">${escapeHtml(newVal || '(empty)')}</span>
+                            </div>
+                        </div>`;
+                }
+                const formula = event.formula_full || event.formula;
+                if (formula) {
+                    changeHtml += f('Formula', formula);
+                }
+            }
+
+            const detailsHtml = event.details ? f('Details', event.details) : '';
+            const errorHtml = event.error_message
+                ? `<div class="detail-field"><span class="detail-label">Error</span><span class="detail-value" style="color:#dc2626;">${escapeHtml(event.error_message)}</span></div>`
+                : '';
+
+            const timestamp = event.timestamp ? new Date(event.timestamp).toLocaleString() : '—';
+
+            const html = `
+            <tr class="detail-row"><td colspan="8"><div class="detail-panel">
+                <div class="detail-sections">
+                    <div class="detail-section">
+                        <div class="detail-section-title">Identity</div>
+                        ${f('Event Type', event.event_type_display)}
+                        ${f('Event ID', event.event_id)}
+                        ${f('Timestamp', timestamp)}
+                        ${f('Correlation', event.correlation_id)}
+                    </div>
+                    <div class="detail-section">
+                        <div class="detail-section-title">Context</div>
+                        ${f('User', event.user_name)}
+                        ${f('Machine', event.machine_name)}
+                        ${f('Model', event.model_name)}
+                        ${f('Version', event.model_version)}
+                    </div>
+                    <div class="detail-section">
+                        <div class="detail-section-title">Location</div>
+                        ${f('Workbook', event.workbook_name)}
+                        ${f('Sheet', event.sheet_name)}
+                        ${f('Cell', event.cell_address)}
+                        ${f('Cell Count', event.cell_count)}
+                        ${f('Path', event.workbook_path)}
+                    </div>
+                </div>
+                ${(changeHtml || detailsHtml || errorHtml) ? `
+                <div class="detail-full-section">
+                    ${changeHtml}
+                    ${detailsHtml}
+                    ${errorHtml}
+                </div>` : ''}
+            </div></td></tr>`;
+
+            return html;
+        }
+
+        // Event index for quick lookup by event_id
+        const eventIndex = new Map();
+
+        function attachRowClickHandlers() {
+            document.querySelectorAll('.event-row').forEach(row => {
+                row.addEventListener('click', () => {
+                    const id = row.dataset.eventId;
+                    const existing = row.nextElementSibling;
+                    if (existing && existing.classList.contains('detail-row')) {
+                        existing.remove();
+                        return;
+                    }
+                    // Close any other open detail rows
+                    document.querySelectorAll('.detail-row').forEach(r => r.remove());
+                    const event = eventIndex.get(id);
+                    if (event) {
+                        row.insertAdjacentHTML('afterend', createDetailRow(event));
+                    }
+                });
+            });
         }
 
         function formatTimestamp(isoString) {

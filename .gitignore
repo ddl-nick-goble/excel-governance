@@ -86,7 +86,12 @@ _ReSharper*/
 *.local.json
 *.local.config
 
+# Python
+__pycache__/
+*.pyc
+
 # DGT specific
 **/buffer.jsonl
 **/buffer_*.jsonl
 **/logs/
+nul

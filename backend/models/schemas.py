@@ -44,6 +44,7 @@ class AuditEventBase(BaseModel):
     old_value: Optional[str] = Field(None, alias="oldValue", description="Previous cell value")
     new_value: Optional[str] = Field(None, alias="newValue", description="New cell value")
     formula: Optional[str] = Field(None, description="Cell formula")
+    display_value: Optional[str] = Field(None, alias="displayValue", description="Formatted cell value as displayed in Excel")
 
     # Additional data
     details: Optional[str] = Field(None, description="Event-specific details")
@@ -95,6 +96,7 @@ class AuditEventCreate(AuditEventBase):
                 "oldValue": "1000",
                 "newValue": "1500",
                 "formula": "=SUM(A1:A4)",
+                "displayValue": "1,500",
                 "details": None,
                 "errorMessage": None,
                 "correlationId": None
@@ -130,7 +132,8 @@ class AuditEventBatch(BaseModel):
                         "sessionId": "sess_123456",
                         "workbookName": "Report.xlsx",
                         "cellAddress": "$A$1",
-                        "newValue": "100"
+                        "newValue": "100",
+                        "displayValue": "100"
                     }
                 ]
             }

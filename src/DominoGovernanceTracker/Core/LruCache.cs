@@ -146,6 +146,22 @@ namespace DominoGovernanceTracker.Core
             }
         }
 
+        /// <summary>
+        /// Returns a snapshot of all key-value pairs (thread-safe copy)
+        /// </summary>
+        public List<KeyValuePair<TKey, TValue>> GetSnapshot()
+        {
+            lock (_lock)
+            {
+                var snapshot = new List<KeyValuePair<TKey, TValue>>(_cache.Count);
+                foreach (var node in _lruList)
+                {
+                    snapshot.Add(new KeyValuePair<TKey, TValue>(node.Key, node.Value));
+                }
+                return snapshot;
+            }
+        }
+
         private class CacheItem
         {
             public TKey Key { get; set; }

@@ -66,6 +66,19 @@ namespace DominoGovernanceTracker
 
             try
             {
+                // Emit AddInUnload event before shutdown
+                if (_eventQueue != null)
+                {
+                    _eventQueue.Enqueue(new AuditEvent
+                    {
+                        EventType = AuditEventType.AddInUnload,
+                        UserName = Environment.UserName,
+                        MachineName = Environment.MachineName,
+                        UserDomain = Environment.UserDomainName,
+                        Details = "Add-in unloaded"
+                    });
+                }
+
                 // Stop self-healing monitors
                 _healthMonitor?.Stop();
                 _healthMonitor?.Dispose();
@@ -265,6 +278,16 @@ namespace DominoGovernanceTracker
                 _systemEventMonitor.SystemResumed += OnSystemResumed;
                 _systemEventMonitor.Start();
                 Log.Information("System event monitor started");
+
+                // Emit AddInLoad event
+                _eventQueue.Enqueue(new AuditEvent
+                {
+                    EventType = AuditEventType.AddInLoad,
+                    UserName = Environment.UserName,
+                    MachineName = Environment.MachineName,
+                    UserDomain = Environment.UserDomainName,
+                    Details = "Add-in loaded v1.0.0"
+                });
 
                 Log.Information("=== DGT Tracking System Initialized Successfully ===");
                 Log.Information("Mode: {Mode}", _config.TrackingEnabled ? "Active" : "Disabled");

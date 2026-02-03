@@ -43,7 +43,6 @@ class AuditEventType(int, enum.Enum):
     SELECTION_CHANGE = 7
     SHEET_ADD = 8
     SHEET_DELETE = 9
-    SHEET_RENAME = 10
     SHEET_ACTIVATE = 11
 
     # System events
@@ -55,6 +54,35 @@ class AuditEventType(int, enum.Enum):
 
     # Model events
     MODEL_REGISTRATION = 17
+
+    # Calculated/dependent cell changes
+    CALCULATED_CELL_CHANGE = 18
+
+    # Formatting changes
+    FORMAT_CHANGE = 19
+
+    # Input vs formula distinction
+    VALUE_INPUT = 23
+    FORMULA_CHANGE = 24
+
+    # Calculation mode
+    CALCULATION_MODE_CHANGE = 25
+
+    # External data
+    DATA_REFRESH_START = 26
+    DATA_REFRESH_END = 27
+
+    # Named ranges / defined names
+    DEFINED_NAME_ADD = 28
+    DEFINED_NAME_CHANGE = 29
+    DEFINED_NAME_DELETE = 30
+
+    # Undo/Redo
+    UNDO_PERFORMED = 31
+    REDO_PERFORMED = 32
+
+    # Save As (identity change)
+    WORKBOOK_SAVE_AS = 33
 
 
 class AuditEvent(Base):
@@ -148,6 +176,10 @@ class AuditEvent(Base):
     formula: Mapped[Optional[str]] = mapped_column(
         Text,
         comment="Cell formula (if applicable)"
+    )
+    display_value: Mapped[Optional[str]] = mapped_column(
+        Text,
+        comment="Formatted cell value as displayed in Excel"
     )
 
     # Additional data

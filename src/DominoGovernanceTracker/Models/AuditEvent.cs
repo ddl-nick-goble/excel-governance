@@ -9,30 +9,58 @@ namespace DominoGovernanceTracker.Models
     public enum AuditEventType
     {
         // Workbook events
-        WorkbookNew,
-        WorkbookOpen,
-        WorkbookClose,
-        WorkbookSave,
-        WorkbookActivate,
-        WorkbookDeactivate,
+        WorkbookNew = 0,
+        WorkbookOpen = 1,
+        WorkbookClose = 2,
+        WorkbookSave = 3,
+        WorkbookActivate = 4,
+        WorkbookDeactivate = 5,
 
         // Cell/Sheet events
-        CellChange,
-        SelectionChange,
-        SheetAdd,
-        SheetDelete,
-        SheetRename,
-        SheetActivate,
+        CellChange = 6,
+        SelectionChange = 7,
+        SheetAdd = 8,
+        SheetDelete = 9,
+        SheetActivate = 11,
 
         // System events
-        SessionStart,
-        SessionEnd,
-        AddInLoad,
-        AddInUnload,
-        Error,
+        SessionStart = 12,
+        SessionEnd = 13,
+        AddInLoad = 14,
+        AddInUnload = 15,
+        Error = 16,
 
         // Model events
-        ModelRegistration
+        ModelRegistration = 17,
+
+        // Calculated/dependent cell changes
+        CalculatedCellChange = 18,
+
+        // Formatting changes
+        FormatChange = 19,
+
+        // Input vs formula distinction
+        ValueInput = 23,
+        FormulaChange = 24,
+
+        // Calculation mode
+        CalculationModeChange = 25,
+
+        // External data
+        DataRefreshStart = 26,
+        DataRefreshEnd = 27,
+
+        // Named ranges / defined names
+        DefinedNameAdd = 28,
+        DefinedNameChange = 29,
+        DefinedNameDelete = 30,
+
+        // Undo/Redo
+        UndoPerformed = 31,
+        RedoPerformed = 32,
+
+        // Save As (identity change)
+        WorkbookSaveAs = 33
     }
 
     /// <summary>
@@ -135,6 +163,12 @@ namespace DominoGovernanceTracker.Models
         /// </summary>
         [JsonPropertyName("formula")]
         public string Formula { get; set; }
+
+        /// <summary>
+        /// Displayed cell text (formatted value as shown in Excel)
+        /// </summary>
+        [JsonPropertyName("displayValue")]
+        public string DisplayValue { get; set; }
 
         // === Additional Data ===
 
