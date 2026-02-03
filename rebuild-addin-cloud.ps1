@@ -1,3 +1,5 @@
+$env:Path += ";C:\Program Files\GitHub CLI"
+gh --version
 # rebuild-addin-cloud.ps1 - Trigger GitHub Actions rebuild and download artifacts
 Write-Host "=== DGT Add-in Cloud Rebuild ===" -ForegroundColor Cyan
 Write-Host ""
@@ -32,6 +34,19 @@ if (-not (Test-Path $workflowPath)) {
     Write-Host "Missing workflow: $workflowPath" -ForegroundColor Red
     Write-Host "Create it first so GitHub can run the rebuild." -ForegroundColor Yellow
     exit 1
+}
+
+# Check git status
+$gitStatus = git status --porcelain
+if ($gitStatus) {
+    Write-Host "WARNING: You have uncommitted changes." -ForegroundColor Yellow
+    Write-Host "Cloud rebuild uses the latest pushed commit, not your local changes." -ForegroundColor Yellow
+    Write-Host ""
+    $response = Read-Host "Continue anyway? (y/n)"
+    if ($response -ne 'y' -and $response -ne 'Y') {
+        Write-Host "Aborting cloud rebuild." -ForegroundColor Red
+        exit 1
+    }
 }
 
 # Push latest commit if needed
@@ -107,9 +122,6 @@ if ($LASTEXITCODE -ne 0) {
 
 # Download artifacts
 $artifactDir = Join-Path $repoRoot ("artifacts\rebuild-addin\" + $runId)
-if (Test-Path $artifactDir) {
-    Remove-Item -Recurse -Force -Path $artifactDir
-}
 New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
 Write-Host "Downloading artifacts to: $artifactDir" -ForegroundColor Green
