@@ -1,0 +1,27 @@
+name: Rebuild Add-in
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: microsoft/setup-msbuild@v2
+      - uses: actions/setup-dotnet@v5
+
+      - name: Rebuild add-in
+        shell: pwsh
+        run: .\rebuild-addin.ps1
+
+      - name: Upload add-in artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dgt-addin
+          if-no-files-found: error
+          path: |
+            src\DominoGovernanceTracker\bin\Debug\net472\publish\DominoGovernanceTracker-AddIn-packed.xll
+            src\DominoGovernanceTracker\bin\Debug\net472\publish\DominoGovernanceTracker-AddIn64-packed.xll
