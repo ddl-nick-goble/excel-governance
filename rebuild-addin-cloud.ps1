@@ -6,14 +6,20 @@ $repoRoot = Split-Path -Parent $PSCommandPath
 Set-Location $repoRoot
 
 # Ensure GitHub CLI is installed
-if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-    Write-Host "GitHub CLI (gh) is not installed or not on PATH." -ForegroundColor Red
-    Write-Host "Install it from https://cli.github.com/ and run 'gh auth login'." -ForegroundColor Yellow
-    exit 1
+$gh = "gh"
+if (-not (Get-Command $gh -ErrorAction SilentlyContinue)) {
+    $ghCandidate = "C:\Program Files\GitHub CLI\gh.exe"
+    if (Test-Path $ghCandidate) {
+        $gh = $ghCandidate
+    } else {
+        Write-Host "GitHub CLI (gh) is not installed or not on PATH." -ForegroundColor Red
+        Write-Host "Install it from https://cli.github.com/ and run 'gh auth login'." -ForegroundColor Yellow
+        exit 1
+    }
 }
 
 # Ensure gh is authenticated
-$authStatus = gh auth status 2>$null
+$authStatus = & $gh auth status 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "GitHub CLI is not authenticated." -ForegroundColor Red
     Write-Host "Run: gh auth login" -ForegroundColor Yellow
@@ -26,19 +32,6 @@ if (-not (Test-Path $workflowPath)) {
     Write-Host "Missing workflow: $workflowPath" -ForegroundColor Red
     Write-Host "Create it first so GitHub can run the rebuild." -ForegroundColor Yellow
     exit 1
-}
-
-# Check git status
-$gitStatus = git status --porcelain
-if ($gitStatus) {
-    Write-Host "WARNING: You have uncommitted changes." -ForegroundColor Yellow
-    Write-Host "Cloud rebuild uses the latest pushed commit, not your local changes." -ForegroundColor Yellow
-    Write-Host ""
-    $response = Read-Host "Continue anyway? (y/n)"
-    if ($response -ne 'y' -and $response -ne 'Y') {
-        Write-Host "Aborting cloud rebuild." -ForegroundColor Red
-        exit 1
-    }
 }
 
 # Push latest commit if needed
@@ -72,7 +65,7 @@ $workflowName = "rebuild-addin.yml"
 $repo = (git config --get remote.origin.url).Trim()
 
 # Trigger the workflow
-$runTrigger = gh workflow run $workflowName
+$runTrigger = & $gh workflow run $workflowName
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Failed to trigger workflow." -ForegroundColor Red
     exit 1
@@ -84,7 +77,7 @@ $runId = $null
 $maxWaitSeconds = 120
 $elapsed = 0
 while (-not $runId -and $elapsed -lt $maxWaitSeconds) {
-    $runsJson = gh run list --workflow $workflowName --branch $branch --limit 5 --json databaseId,headSha,status,createdAt
+    $runsJson = & $gh run list --workflow $workflowName --branch $branch --limit 5 --json databaseId,headSha,status,createdAt
     if ($LASTEXITCODE -eq 0) {
         $runs = $runsJson | ConvertFrom-Json
         $match = $runs | Where-Object { $_.headSha -eq $headSha } | Select-Object -First 1
@@ -106,7 +99,7 @@ if (-not $runId) {
 Write-Host "Run ID: $runId" -ForegroundColor Cyan
 Write-Host "Watching build..." -ForegroundColor Green
 
-gh run watch $runId
+& $gh run watch $runId
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed or was canceled." -ForegroundColor Red
     exit 1
@@ -114,11 +107,14 @@ if ($LASTEXITCODE -ne 0) {
 
 # Download artifacts
 $artifactDir = Join-Path $repoRoot ("artifacts\rebuild-addin\" + $runId)
+if (Test-Path $artifactDir) {
+    Remove-Item -Recurse -Force -Path $artifactDir
+}
 New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
 Write-Host "Downloading artifacts to: $artifactDir" -ForegroundColor Green
 
-gh run download $runId -D $artifactDir
+& $gh run download $runId -D $artifactDir
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Artifact download failed." -ForegroundColor Red
     exit 1
